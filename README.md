@@ -115,7 +115,14 @@ node --input-type=module --check < web/editor.js
 node --input-type=module --check < web/extension.js
 ```
 
-The automated tests exercise image repair, masks, staging, asset validation, tensor exports and mocked sampler integration. The standalone route/UI harness is `python tests/harness.py` at `http://127.0.0.1:8199`; it stubs the ComfyUI host only and uses real image operations and routes. It is for development, not installation.
+The automated tests exercise image repair, masks, staging, asset validation, tensor exports and mocked sampler integration. A DOM/canvas integration check also passed against real HTTP editor routes: restore, brush, repair, apply, expansion, undo/redo, rotate/flip, comparison, lasso, blur and Detect. This is not a full browser layout test; browser binary download was unavailable here. The standalone route/UI harness is `python tests/harness.py` at `http://127.0.0.1:8199`; it stubs the ComfyUI host only and uses real image operations and routes. It is for development, not installation. To reproduce the DOM/canvas check with that harness running in another terminal, install development-only packages and run:
+
+```sh
+npm install --no-save --package-lock=false jsdom @napi-rs/canvas
+node tests/ui_check.cjs
+```
+
+These packages are unnecessary for using the suite.
 
 A real ComfyUI/GPU generation run is still required to confirm model quality and frontend compatibility on your installation. This development environment has no running ComfyUI or model weights. Photos are limited to 24 megapixels. Editing uses browser canvas and 8-bit PNG working assets; it does not preserve RAW/HDR data, EXIF, animation, or original color profiles. Large photos and undo history consume browser RAM. Use ComfyUI's normal private access controls; the editor has no separate login.
 
