@@ -17,8 +17,8 @@ async function waitIdle(){for(let i=0;i<100;i++){if(!document.querySelector('but
  const {openEditor}=await import(pathToFileURL(path.resolve(__dirname,'../web/editor.js')));
  const fixture=createCanvas(320,240);const fc=fixture.getContext('2d');fc.fillStyle='#be9128';fc.fillRect(0,0,320,240);fc.fillStyle='black';fc.fillRect(140,100,30,30);const img=fixture.toDataURL();const mc=createCanvas(320,240);const m=mc.getContext('2d');m.fillStyle='black';m.fillRect(0,0,320,240);
  const initial=await (await request('/pristine_eraser/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:img,original:img,mask:mc.toDataURL()})})).json();
- let applied, modelCalls=0, applyCalls=0;
- await openEditor({state:initial,url:p=>base+p,request,onApply:r=>{applied=r;applyCalls++;},onModel:async(assets,onStatus)=>{
+ let applied, modelCalls=0, applyCalls=0, preloadCalls=0, releaseCalls=0;
+ await openEditor({state:initial,url:p=>base+p,request,onPreload:async()=>{preloadCalls++;return {components:['diffusion','clip','vae']};},onRelease:async()=>{releaseCalls++;return {retained:false};},onApply:r=>{applied=r;applyCalls++;},onModel:async(assets,onStatus)=>{
      modelCalls++;onStatus('Simulated model fill…');
      const generated=createCanvas(320,240);const g=generated.getContext('2d');g.fillStyle='#dfb940';g.fillRect(0,0,320,240);
      return (await request('/pristine_eraser/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:generated.toDataURL(),mask:mc.toDataURL(),original:img})})).json();
@@ -26,6 +26,9 @@ async function waitIdle(){for(let i=0;i<100;i++){if(!document.querySelector('but
 });
  const $=s=>document.querySelector(s);
  assert.equal($('.pe-display').width,320);
+ $('[data-action=connection]').click();await waitIdle();assert.match($('.pe-status').textContent,/version 0.3.0/);
+ $('[data-action=preload]').click();await waitIdle();assert.equal(preloadCalls,1);assert.match($('.pe-status').textContent,/Preloaded diffusion, clip, vae/);
+ $('[data-action=release]').click();await waitIdle();assert.equal(releaseCalls,1);assert.match($('.pe-status').textContent,/retention released/);
  // Paint a stroke around the black patch, then local inpaint via real server.
  const out=$('.pe-display');out.onpointerdown({clientX:150,clientY:115,button:0,pointerId:1,preventDefault(){}});out.onpointermove({clientX:165,clientY:115});out.onpointerup({});
  $('[data-action=heal]').click();await waitIdle();assert.match($('.pe-status').textContent,/Repair applied/);
@@ -46,5 +49,5 @@ async function waitIdle(){for(let i=0;i<100;i++){if(!document.querySelector('but
  $('[data-tool=detect]').click();out.onpointerdown({clientX:0,clientY:0,button:0,pointerId:1,preventDefault(){}});await waitIdle();assert.match($('.pe-status').textContent,/Color region selected/);
  $('.pe-apply').click();await waitIdle();assert.ok(applied.mask_asset);
  $('.pe-close').click();assert.equal(document.querySelector('.pe-dialog'),null);
- console.log('PASS: DOM/canvas editor integration: restore, brush, local heal, apply/assets, model callback/preview without auto-Apply, expand, undo/redo, rotate/flip, compare, lasso, blur, detect, close.');
+ console.log('PASS: DOM/canvas editor integration: connection health, preload/release callbacks, restore, brush, local heal, apply/assets, model callback/preview without auto-Apply, expand, undo/redo, rotate/flip, compare, lasso, blur, detect, close.');
 })().catch(e=>{console.error(e);process.exit(1);});

@@ -62,6 +62,38 @@ class SuiteTests(unittest.TestCase):
             # Returning a preview never changes the previously applied source asset.
             self.assertEqual(p.load(names[0]).getpixel((15,15)),(20,40,60,128))
 
+    def test_preload_and_release_without_photo_or_generation(self):
+        from unittest.mock import patch
+        from pristine_test.residency import ModelResidency
+        import sys, types
+        model=object();vae=types.SimpleNamespace(patcher=object());clip=types.SimpleNamespace(patcher=object())
+        calls=[]
+        mm=types.ModuleType('comfy.model_management');mm.load_models_gpu=lambda patchers:calls.append(patchers)
+        comfy=types.ModuleType('comfy');comfy.model_management=mm
+        with patch.dict(sys.modules,{'comfy':comfy,'comfy.model_management':mm}):
+            cache=ModelResidency(max_sessions=2)
+            status=cache.hold('s',model,vae,clip)
+            self.assertTrue(status['retained']);self.assertIn('clip',status['components'])
+            self.assertEqual(calls,[[model,vae.patcher,clip.patcher]])
+            cache.hold('s',model,vae,warm=False)
+            self.assertIs(cache._sessions['s'][2],clip)
+            self.assertEqual(len(calls),1)
+            cache.hold('t',object(),vae,warm=False);cache.hold('u',object(),vae,warm=False)
+            self.assertEqual(len(cache._sessions),2);self.assertNotIn('s',cache._sessions)
+            self.assertTrue(cache.release('t')['released']);self.assertFalse(cache.release('t')['released'])
+            with patch.object(p,'RESIDENCY',ModelResidency()) as resident:
+                node=p.PristineEditorRender()
+                self.assertEqual(node.check_lazy_status(model_request='preload:x'),['model','vae','clip'])
+                self.assertEqual(node.check_lazy_status(model_request='release:x'),[])
+                with patch.object(p.PristineModelInpaint,'execute') as sampler:
+                    result=node.execute('','','',model=model,vae=vae,clip=clip,model_request='preload:x',residency_key='k')
+                    sampler.assert_not_called()
+                    self.assertTrue(result['ui']['pristine_result'][0]['retained'])
+                    self.assertEqual(result['result'][0].shape,(1,1,1,3))
+                    result=node.execute('','','',model_request='release:x',residency_key='k')
+                    self.assertFalse(result['ui']['pristine_result'][0]['retained'])
+                    self.assertEqual(len(resident._sessions),0)
+
     def test_staging_batch_selection(self):
         batch=torch.stack([torch.zeros(12,16,3),torch.ones(12,16,3)])
         p.PristineSend().execute(batch,'example',1)

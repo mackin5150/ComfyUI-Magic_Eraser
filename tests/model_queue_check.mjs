@@ -35,3 +35,23 @@ await assert.rejects(()=>queueModelEdit({output:graph,nodeId:1,assets,requestId:
 await assert.rejects(()=>queueModelEdit({output:graph,nodeId:1,assets,requestId:'x',request:async(path)=>path==='/prompt'?response({prompt_id:'p2'}):response({'p2':{status:{status_str:'error',messages:[['execution_error',{exception_message:'out of memory'}]]}}})}),/out of memory/);
 await assert.rejects(()=>queueModelEdit({output:graph,nodeId:1,assets,requestId:'x',request:async(path)=>path==='/prompt'?response({prompt_id:'p3'}):response({'p3':{status:{status_str:'success',completed:true},outputs:{}}})}),/without returning/);
 console.log('PASS: isolated model prompt, required connections, graph immutability, scoped history, queue failures and execution errors.');
+
+// Preload has no photo, no text-encoding dependency, and no Save Image branch.
+const withClip=JSON.parse(JSON.stringify(graph));withClip['1'].inputs.clip=['2',1];
+const preload=buildModelPrompt(withClip,1,{residency_key:'session-1'},'preload:1','preload');
+assert.deepEqual(Object.keys(preload),['1','2']);assert.equal(preload['1'].inputs.edited_asset,'');
+const release=buildModelPrompt(withClip,1,{residency_key:'session-1'},'release:1','release');
+assert.deepEqual(Object.keys(release),['1']);assert.equal(release['1'].inputs.clip,undefined);
+assert.throws(()=>buildModelPrompt(graph,1,{},'preload:1','preload'),/Connect CLIP/);
+
+const {requestJson,readJobHistory}=await import('../web/network.js');
+await assert.rejects(()=>requestJson(async()=>{throw new TypeError('Failed to fetch');},'/pristine_eraser/apply',{},'Upload editor photo'),/Upload editor photo.*pristine_eraser\/apply.*Failed to fetch/);
+await assert.rejects(()=>requestJson(async()=>({ok:false,status:413,json:async()=>({error:'Too large'})}),'/pristine_eraser/apply',{},'Upload'),/request-size limit/);
+await assert.rejects(()=>requestJson(async()=>({ok:false,status:502,json:async()=>{throw Error('HTML');}}),'/prompt',{},'Queue'),/HTTP 502.*expected JSON/);
+let attempts=0;
+const recovered=await readJobHistory(async()=>{if(++attempts<3)throw new TypeError('Failed to fetch');return response({ok:true});},'/history/test',{delayMs:1});
+assert.equal(attempts,3);assert.ok(recovered.ok);
+let submitted=0;
+await assert.rejects(()=>queueModelEdit({output:graph,nodeId:1,assets,requestId:'x',request:async()=>{submitted++;throw new TypeError('Failed to fetch');}}),/Queue edit.*Failed to fetch/);
+assert.equal(submitted,1);
+console.log('PASS: preload/release graph isolation, endpoint-specific errors, upload limits, HTML proxy errors, safe history retries and no duplicate queue submissions.');

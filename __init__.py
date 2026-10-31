@@ -10,6 +10,9 @@ import folder_paths
 from server import PromptServer
 from .core import decode, encode, heal, detect, persist, safe_path
 
+from .residency import RESIDENCY
+
+VERSION = "0.3.0"
 WEB_DIRECTORY = './web'
 
 def root():
@@ -43,7 +46,10 @@ class PristineEditor:
                 'render_max_side': ('INT', {'default':1024, 'min':256, 'max':4096, 'step':64}),
                 'blend_pixels': ('INT', {'default':4, 'min':0, 'max':64}),
                 'model_request': ('STRING', {'default':''}),
-            }}
+                'clip': ('CLIP', {'lazy':True}),
+                'keep_loaded': ('BOOLEAN', {'default':True}),
+                'residency_key': ('STRING', {'default':''}),
+            }, 'hidden': {'unique_id':'UNIQUE_ID'}}
     RETURN_TYPES = ('IMAGE', 'MASK', 'IMAGE', 'IMAGE')
     RETURN_NAMES = ('image', 'selection_mask', 'original', 'rgba')
     FUNCTION = 'execute'
@@ -52,15 +58,29 @@ class PristineEditor:
     @classmethod
     def IS_CHANGED(cls, **kw):
         return tuple(asset_hash(kw.get(k,'')) for k in ('edited_asset','mask_asset','original_asset')) + (kw.get('model_request',''),)
-    def check_lazy_status(self, model_request='', model=None, vae=None, positive=None, negative=None, **kw):
+    def check_lazy_status(self, model_request='', model=None, vae=None, positive=None, negative=None, clip=None, **kw):
         # Ordinary Save Image runs do not load or evaluate the model branch.
-        if not model_request: return []
-        return [k for k,v in {'model':model,'vae':vae,'positive':positive,'negative':negative}.items() if v is None]
+        if not model_request or model_request.startswith('release:'): return []
+        if model_request.startswith('preload:'):
+            return [k for k,v in {'model':model,'vae':vae,'clip':clip}.items() if v is None]
+        missing = [k for k,v in {'model':model,'vae':vae,'positive':positive,'negative':negative}.items() if v is None]
+        # CLIP is not needed for sampling when conditioning is already computed.
+        # The preload action explicitly evaluates and retains its optional connection.
+        return missing
 
     def execute(self, edited_asset, mask_asset, original_asset, model=None, vae=None,
                 positive=None, negative=None, conditioning_mode='regular_checkpoint', seed=0,
                 steps=28, cfg=5.0, sampler_name='dpmpp_2m', scheduler='karras', denoise=1.0,
-                render_max_side=1024, blend_pixels=4, model_request=''):
+                render_max_side=1024, blend_pixels=4, model_request='', clip=None, keep_loaded=True, residency_key='', unique_id=None):
+        key = residency_key or str(unique_id or 'default')
+        if model_request.startswith('release:'):
+            status = RESIDENCY.release(key)
+            return {'ui': {'pristine_result': [{'request_id':model_request, **status}]}, 'result': self._empty_outputs()}
+        if model_request.startswith('preload:'):
+            if any(x is None for x in (model, vae, clip)):
+                raise ValueError('Connect MODEL, VAE and CLIP to the main node before Preload Models.')
+            status = RESIDENCY.hold(key, model, vae, clip, warm=True)
+            return {'ui': {'pristine_result': [{'request_id':model_request, **status}]}, 'result': self._empty_outputs()}
         if model_request and any(x is None for x in (model, vae, positive, negative)):
             raise ValueError('Connect MODEL, VAE, positive and negative conditioning to the main editor node first.')
         if not edited_asset:
@@ -87,11 +107,22 @@ class PristineEditor:
                 'original_asset': original_asset or persist(root(), original),
             }
             selection = torch.zeros_like(selection)
+            if keep_loaded:
+                # Keep live references. Preload explicitly warms all components; do
+                # not move weights after every decode and add another transfer.
+                RESIDENCY.hold(key, model, vae, clip, positive, negative, warm=False)
+            else:
+                RESIDENCY.release(key)
         rgba = torch.from_numpy(np.array(im).astype(np.float32) / 255)[None, ...]
         outputs = (tensor(im), selection, tensor(original), rgba)
         if model_request:
             return {'ui': {'pristine_result': [{'request_id':model_request, **result_assets}]}, 'result':outputs}
         return outputs
+
+    @staticmethod
+    def _empty_outputs():
+        return (torch.zeros((1,1,1,3)), torch.zeros((1,1,1)),
+                torch.zeros((1,1,1,3)), torch.zeros((1,1,1,4)))
 
 class PristineEditorRender(PristineEditor):
     # Queue-only output variant lets the UI execute the editor without Save Image.
@@ -144,6 +175,10 @@ def operation(b):
     if b['op'] == 'heal': return {'image': encode(heal(im, decode(b['mask']), b.get('radius',5)))}
     if b['op'] == 'detect': return {'mask': encode(detect(im,b['x'],b['y'],b.get('tolerance',24)).convert('RGBA'))}
     raise ValueError('Unknown operation')
+
+@PromptServer.instance.routes.get('/pristine_eraser/health')
+async def health(request):
+    return web.json_response({'ok': True, 'version': VERSION, 'preload': True})
 
 @PromptServer.instance.routes.post('/pristine_eraser/process')
 async def do_process(request): return await process(request, operation)

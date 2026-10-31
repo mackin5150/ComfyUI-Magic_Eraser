@@ -1,6 +1,6 @@
 {
   "last_node_id": 6,
-  "last_link_id": 7,
+  "last_link_id": 8,
   "nodes": [
     {
       "id": 1,
@@ -11,7 +11,7 @@
       ],
       "size": [
         360,
-        570
+        650
       ],
       "flags": {},
       "order": 0,
@@ -36,6 +36,11 @@
           "name": "negative",
           "type": "CONDITIONING",
           "link": 6
+        },
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 8
         }
       ],
       "outputs": [
@@ -78,6 +83,8 @@
         1,
         1024,
         4,
+        "",
+        true,
         ""
       ]
     },
@@ -109,7 +116,8 @@
           "type": "CLIP",
           "links": [
             3,
-            4
+            4,
+            8
           ]
         },
         {
@@ -287,6 +295,14 @@
       6,
       0,
       "IMAGE"
+    ],
+    [
+      8,
+      2,
+      1,
+      1,
+      4,
+      "CLIP"
     ]
   ],
   "groups": [],

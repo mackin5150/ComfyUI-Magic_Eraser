@@ -65,12 +65,30 @@ Refresh the model list or restart, then select it in **Load Checkpoint**. For a 
 | --- | --- |
 | Load Checkpoint `MODEL` | Main editor `model` |
 | Load Checkpoint `VAE` (or Load VAE) | Main editor `vae` |
-| Load Checkpoint `CLIP` | Two CLIP Text Encode nodes `clip` |
+| Load Checkpoint `CLIP` | Main editor `clip` **and** both CLIP Text Encode nodes `clip` |
 | Positive CLIP Text Encode | Main editor `positive` |
 | Negative CLIP Text Encode | Main editor `negative` |
 | Main editor `image` | Save Image `images` |
 
 Set the positive prompt to describe the finished background/foreground you want revealed, such as “continuous yellow leather surface, matching grain, natural lighting.” Include enough selection margin around the entire unwanted object, its shadow and its edges. The model reconstructs plausible content; it cannot recover the actual hidden scene or guarantee an invisible repair every time.
+
+### Preload models and keep them available
+
+Connect `model`, `vae`, and the new `clip` port directly to the main node. The CLIP output still connects to the positive/negative text encoder nodes. With separate diffusion/text-encoder/VAE loaders, connect their corresponding MODEL, CLIP and VAE outputs to the same ports; the architecture compatibility requirements below still apply. A DualCLIPLoader's combined CLIP object uses the single `clip` port.
+
+Click **Preload Models** on the node or inside its editor. This queues only the loader dependencies and warms diffusion, CLIP and VAE through ComfyUI's model manager. It works before uploading a photo, does not sample, and does not run Save Image. The first preload still takes time to read the weights. A success message lists the loaded components.
+
+Leave **keep_loaded = true** (the default) to retain the editor's model bundle after edits. The suite retains up to two editor sessions and preserves the preloaded CLIP reference alongside diffusion/VAE. **Release Models** in the editor drops its retention references. ComfyUI's own caches may still hold the weights afterward.
+
+Retention avoids losing the bundle to garbage collection and requests device loading during preload. It does **not** bypass ComfyUI's memory manager or guarantee that all weights remain in GPU memory. ComfyUI may still offload under memory pressure or according to your launch settings. There is still queue/sampling/encoding/decoding time for each edit. We do not force full-GPU loading or change your global memory settings. This keeps the feature usable when the complete bundle does not fit in VRAM.
+
+### Diagnose “Failed to fetch”
+
+Click **Check connection** in the editor. A successful result reports backend version `0.3.0`. A 404 means the updated backend route is missing or the request is being routed incorrectly; restart ComfyUI and refresh the browser, then check the URL/proxy if it persists.
+
+Requests now report their phase and endpoint: photo upload, image operation, queue submission, or job-history polling. HTTP 413 identifies an upload size limit; non-JSON responses identify a possible proxy/login/error page. A raw fetch failure means the browser did not receive a usable response, which by itself does not establish whether model loading, the server, or the network caused the interruption. Inspect the ComfyUI terminal at the same time.
+
+Read-only history checks retry up to four times after connection failures. Queue submissions are never automatically retried, preventing duplicate model jobs. If submission loses its response, inspect Queue/History before clicking again. Preloading can reduce weight-loading delay, but cannot repair a broken browser-to-server connection. The failure on your own server has not been reproduced in this development environment; use the new endpoint-specific message to narrow it down if it continues.
 
 ### Remove an item inside the editor
 
@@ -139,7 +157,7 @@ node --input-type=module --check < web/model_queue.js
 node tests/model_queue_check.mjs
 ```
 
-Seven Python tests exercise image repair, masks, staging, asset validation, tensor exports, lazy main-node model execution, preview preservation and mocked sampler integration. Queue tests verify isolated upstream-only snapshots, unchanged workflow state, scoped result retrieval and error handling. A DOM/canvas integration check also passed against real HTTP editor routes: restore, brush, repair, apply, expansion, undo/redo, rotate/flip, comparison, lasso, blur, Detect and a simulated model callback/preview without automatic Apply. This is not a full browser layout test; browser binary download was unavailable here. The standalone route/UI harness is `python tests/harness.py` at `http://127.0.0.1:8199`; it stubs the ComfyUI host only and uses real image operations and routes. It is for development, not installation. To reproduce the DOM/canvas check with that harness running in another terminal, install development-only packages and run:
+Eight Python tests exercise image repair, masks, staging, asset validation, tensor exports, lazy main-node model execution, preview preservation, preload/release without a photo, bounded retention and mocked sampler integration. Queue tests verify isolated upstream-only snapshots, unchanged workflow state, scoped result retrieval, preload/release graph isolation, transient history recovery, endpoint-specific errors and no duplicate submissions. A DOM/canvas integration check also passed against real HTTP editor routes: restore, brush, repair, apply, expansion, undo/redo, rotate/flip, comparison, lasso, blur, Detect, connection health, preload/release callbacks and a simulated model callback/preview without automatic Apply. This is not a full browser layout test; browser binary download was unavailable here. The standalone route/UI harness is `python tests/harness.py` at `http://127.0.0.1:8199`; it stubs the ComfyUI host only and uses real image operations and routes. It is for development, not installation. To reproduce the DOM/canvas check with that harness running in another terminal, install development-only packages and run:
 
 ```sh
 npm install --no-save --package-lock=false jsdom @napi-rs/canvas
