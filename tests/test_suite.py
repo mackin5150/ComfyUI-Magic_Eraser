@@ -40,7 +40,7 @@ class SuiteTests(unittest.TestCase):
         import PIL.ImageDraw
         PIL.ImageDraw.Draw(m).rectangle((10,10,20,20),fill=255)
         names=[persist(p.root(),x) for x in (im,m,im)]
-        def fake(image,mask,*args):
+        def fake(image,mask,*args,**kwargs):
             return (image*(1-mask[...,None])+torch.ones_like(image)*mask[...,None],)
         with patch.object(p.PristineModelInpaint,'execute',side_effect=fake) as model:
             node.execute(*names)
@@ -101,6 +101,39 @@ class SuiteTests(unittest.TestCase):
         asset=json.loads((p.root()/(hashlib.sha256(b'example').hexdigest()+'.json')).read_text())['asset']
         self.assertEqual(p.load(asset).getpixel((0,0)),(255,255,255))
         with self.assertRaises(ValueError):p.PristineSend().execute(batch,'example',3)
+    def test_flux_fill_recipe(self):
+        from unittest.mock import patch
+        import sys,types
+        seen={}
+        class Conditioning:
+            def encode(self,**kw):seen['noise_mask']=kw['noise_mask'];return kw['positive'],kw['negative'],{'samples':kw['pixels']}
+        class Decode:
+            def decode(self,vae,samples):return (torch.ones_like(samples['samples']),)
+        ks={}
+        def common_ksampler(model,seed,steps,cfg,sampler_name,scheduler,positive,negative,latent,denoise=1.0):
+            ks.update(cfg=cfg,sampler=sampler_name,scheduler=scheduler,positive=positive,negative=negative);return (latent,)
+        nh=types.ModuleType('node_helpers')
+        def conditioning_set_values(conditioning,values={},append=False):
+            return [[t[0],{**t[1],**values}] for t in conditioning]
+        nh.conditioning_set_values=conditioning_set_values
+        nodes_stub=types.SimpleNamespace(InpaintModelConditioning=Conditioning,VAEDecode=Decode,common_ksampler=common_ksampler)
+        flux_model=types.SimpleNamespace(model=types.SimpleNamespace(model_type=types.SimpleNamespace(name='FLUX')))
+        source=torch.zeros(1,63,77,3);mask=torch.zeros(1,63,77);mask[:,10:20,10:20]=1
+        node=p.PristineModelInpaint()
+        with patch.dict(sys.modules,{'nodes':nodes_stub,'node_helpers':nh}):
+            result=node.execute(source,mask,flux_model,None,[[None,{}]],[[None,{}]],'regular_checkpoint',0,1,5.0,'dpmpp_2m','karras',1.0,512)[0]
+            self.assertEqual(result.shape,source.shape)
+            # Official BFL FLUX Fill recipe: full-image latent (no noise mask), guidance-distilled cfg 1.0,
+            # euler/normal when the SD defaults are left untouched, FluxGuidance on the positive cond only.
+            self.assertFalse(seen['noise_mask'])
+            self.assertEqual(ks['cfg'],1.0)
+            self.assertEqual((ks['sampler'],ks['scheduler']),('euler','normal'))
+            for entry in ks['positive']:self.assertEqual(entry[1]['guidance'],30.0)
+            for entry in ks['negative']:self.assertNotIn('guidance',entry[1])
+            # A user-chosen sampler/scheduler is respected; explicit guidance passes through.
+            node.execute(source,mask,flux_model,None,[[None,{}]],[[None,{}]],'regular_checkpoint',0,1,5.0,'euler_ancestral','simple',1.0,512,guidance=42.0)
+            self.assertEqual((ks['sampler'],ks['scheduler']),('euler_ancestral','simple'))
+            self.assertEqual(ks['positive'][0][1]['guidance'],42.0)
     def test_model_companion_composite_and_modes(self):
         import sys,types
         seen=[]

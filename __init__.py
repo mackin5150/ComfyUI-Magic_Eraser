@@ -40,6 +40,7 @@ class PristineEditor:
                 'seed': ('INT', {'default':0, 'min':0, 'max':0xffffffffffffffff}),
                 'steps': ('INT', {'default':28, 'min':1, 'max':200}),
                 'cfg': ('FLOAT', {'default':5.0, 'min':0, 'max':30, 'step':0.1}),
+                'guidance': ('FLOAT', {'default':30.0, 'min':0.0, 'max':100.0, 'step':0.5}),
                 'sampler_name': (['dpmpp_2m','euler','euler_ancestral','dpmpp_sde'],),
                 'scheduler': (['karras','normal','simple','sgm_uniform'],),
                 'denoise': ('FLOAT', {'default':1.0, 'min':0.01, 'max':1.0, 'step':0.01}),
@@ -70,7 +71,7 @@ class PristineEditor:
 
     def execute(self, edited_asset, mask_asset, original_asset, model=None, vae=None,
                 positive=None, negative=None, conditioning_mode='regular_checkpoint', seed=0,
-                steps=28, cfg=5.0, sampler_name='dpmpp_2m', scheduler='karras', denoise=1.0,
+                steps=28, cfg=5.0, guidance=30.0, sampler_name='dpmpp_2m', scheduler='karras', denoise=1.0,
                 render_max_side=1024, blend_pixels=4, model_request='', clip=None, keep_loaded=True, residency_key='', unique_id=None):
         key = residency_key or str(unique_id or 'default')
         if model_request.startswith('release:'):
@@ -95,7 +96,7 @@ class PristineEditor:
             from .model_nodes import PristineModelInpaint
             generated = PristineModelInpaint().execute(
                 tensor(im), selection, model, vae, positive, negative, conditioning_mode,
-                seed, steps, cfg, sampler_name, scheduler, denoise, render_max_side, blend_pixels)[0]
+                seed, steps, cfg, sampler_name, scheduler, denoise, render_max_side, blend_pixels, guidance=guidance)[0]
             rgb = np.clip(generated[0].detach().cpu().numpy()*255, 0, 255).round().astype(np.uint8)
             # Regenerated cutouts become opaque; untouched alpha remains unchanged.
             alpha = np.array(im.getchannel('A')).copy()

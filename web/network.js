@@ -20,7 +20,8 @@ export async function requestJson(request,path,options={},phase='Request') {
     return data;
 }
 
-export async function readJobHistory(request,path,{attempts=4,delayMs=1000}={}) {
+// A long first load can outlast a flaky proxy; tolerate several consecutive failed reads.
+export async function readJobHistory(request,path,{attempts=8,delayMs=1000}={}) {
     let last;
     for(let i=0;i<attempts;i++) {
         try{return await requestJson(request,path,{},'Read model job');}

@@ -72,6 +72,24 @@ Refresh the model list or restart, then select it in **Load Checkpoint**. For a 
 
 Set the positive prompt to describe the finished background/foreground you want revealed, such as “continuous yellow leather surface, matching grain, natural lighting.” Include enough selection margin around the entire unwanted object, its shadow and its edges. The model reconstructs plausible content; it cannot recover the actual hidden scene or guarantee an invisible repair every time.
 
+### FLUX Fill checkpoints (AGFlux_fill and similar)
+
+FLUX Fill is supported natively by the main editor's model buttons — no companion node or separate workflow needed. The node detects a loaded FLUX model automatically and applies the official Black Forest Labs recipe: full-image latent with image+mask conditioning (`InpaintModelConditioning` without noise mask), `cfg` forced to 1.0, FluxGuidance on the positive prompt only, and euler/normal sampling when the SD defaults are left untouched.
+
+Wire standard ComfyUI loaders into the main editor:
+
+| From | To |
+| --- | --- |
+| UNETLoader (e.g., `AGFlux_fill.safetensors` in `models/diffusion_models/`) | Main editor `model` |
+| VAELoader (`flux_vae.safetensors` or `ae.safetensors` in `models/vae/`) | Main editor `vae` |
+| DualCLIPLoader (`t5xxl_fp16.safetensors`, `clip_l.safetensors`, type **flux**) — or ComfyUI-GGUF's DualCLIPLoaderGGUF with a quantized T5 encoder | Both CLIP Text Encode nodes' `clip` **and** main editor `clip` (preload) |
+| Positive CLIP Text Encode | Main editor `positive` |
+| Negative CLIP Text Encode | Main editor `negative` |
+
+Set the positive prompt to describe what should appear in the selection, as with SD checkpoints; the negative prompt can be empty for FLUX Fill. Use the **guidance** widget (default 30) instead of cfg: guidance carries the model strength while cfg is forced to 1.0 on FLUX models. Leave sampler/scheduler at their defaults and the node switches them to euler/normal automatically; your own choice is respected.
+
+The first run loads the ~12 GB diffusion weights plus T5, so click **Preload Models** once (with `clip` connected as above) before editing. With keep_loaded enabled, ComfyUI's model manager keeps the bundle resident between queued runs, so repeated edits do not re-read the checkpoint.
+
 ### Preload models and keep them available
 
 Connect `model`, `vae`, and the new `clip` port directly to the main node. The CLIP output still connects to the positive/negative text encoder nodes. With separate diffusion/text-encoder/VAE loaders, connect their corresponding MODEL, CLIP and VAE outputs to the same ports; the architecture compatibility requirements below still apply. A DualCLIPLoader's combined CLIP object uses the single `clip` port.
@@ -88,7 +106,7 @@ Click **Check connection** in the editor. A successful result reports backend ve
 
 Requests now report their phase and endpoint: photo upload, image operation, queue submission, or job-history polling. HTTP 413 identifies an upload size limit; non-JSON responses identify a possible proxy/login/error page. A raw fetch failure means the browser did not receive a usable response, which by itself does not establish whether model loading, the server, or the network caused the interruption. Inspect the ComfyUI terminal at the same time.
 
-Read-only history checks retry up to four times after connection failures. Queue submissions are never automatically retried, preventing duplicate model jobs. If submission loses its response, inspect Queue/History before clicking again. Preloading can reduce weight-loading delay, but cannot repair a broken browser-to-server connection. The failure on your own server has not been reproduced in this development environment; use the new endpoint-specific message to narrow it down if it continues.
+Read-only history checks retry up to eight times (one second apart) after connection failures, so a brief proxy blip during a long first load no longer kills the poll loop. Queue submissions are never automatically retried, preventing duplicate model jobs. If submission loses its response, inspect Queue/History before clicking again. Preloading can reduce weight-loading delay, but cannot repair a broken browser-to-server connection. The failure on your own server has not been reproduced in this development environment; use the new endpoint-specific message to narrow it down if it continues.
 
 ### Remove an item inside the editor
 
@@ -110,7 +128,7 @@ Read-only history checks retry up to four times after connection failures. Queue
 
 ### Main-node model settings
 
-Select `regular_checkpoint` for ordinary SD1.5/SDXL checkpoints, or `dedicated_inpaint_checkpoint` for compatible dedicated inpaint checkpoints. Set `seed`, `steps`, `cfg`, sampler, scheduler, `denoise`, and `render_max_side` on the main node. New content usually needs high denoise; lower it when preserving existing texture is more important.
+Select `regular_checkpoint` for ordinary SD1.5/SDXL checkpoints, or `dedicated_inpaint_checkpoint` for compatible dedicated inpaint checkpoints. Set `seed`, `steps`, `cfg`, sampler, scheduler, `denoise`, and `render_max_side` on the main node. New content usually needs high denoise; lower it when preserving existing texture is more important. For FLUX Fill models set **guidance** (default 30) instead of cfg — cfg is forced to 1.0 and sampler/scheduler default to euler/normal automatically, as described above.
 
 `blend_pixels` (default 4) softens the model fill inward from the selected edge; 0 uses a hard boundary. Unselected pixels remain unchanged. Paint slightly beyond the object so the blending margin contains clean background rather than the object's outline.
 
@@ -124,9 +142,9 @@ The result is a preview until you choose Apply to Node. Failure or interruption 
 
 ### Model compatibility and the optional companion
 
-Model, VAE and conditioning must belong to compatible architectures. Built-in model editing supports SD1.5/SDXL-style sampling and dedicated inpaint conditioning. It is not a universal loader for every model family.
+Model, VAE and conditioning must belong to compatible architectures. Built-in model editing supports FLUX Fill checkpoints (auto-detected; see above) plus SD1.5/SDXL-style sampling and dedicated inpaint conditioning. It is not a universal loader for every model family.
 
-For Flux Fill, Qwen Image Edit, WAN or other specialized models, use their native loaders and conditioning workflows. The main editor's IMAGE/MASK outputs can feed such a workflow, and its decoded IMAGE can feed Send to Editor. Do not assume the built-in SD-style model buttons support those architectures.
+For Qwen Image Edit, WAN or other specialized models, use their native loaders and conditioning workflows. The main editor's IMAGE/MASK outputs can feed such a workflow, and its decoded IMAGE can feed Send to Editor. Do not assume the built-in model buttons support those architectures.
 
 The separate **Pristine • Model Inpaint / Outpaint** node is retained for conventional graph workflows and backward compatibility. Connect editor IMAGE/MASK plus MODEL/VAE/conditioning to it, then connect its output to Save Image or Send to Editor (`result` slot). Loading `result` establishes a new editor session/original; the main-node model buttons preserve the current original and undo history instead.
 
@@ -136,7 +154,7 @@ The separate **Pristine • Model Inpaint / Outpaint** node is retained for conv
 | --- | --- |
 | Pristine • Open Photo Editor | Interactive model removal/outpainting with optional MODEL/VAE/conditioning; exports applied assets on normal Run |
 | Pristine • Send to Editor | Stages one upstream image in a named slot |
-| Pristine • Model Inpaint / Outpaint | Optional SD-style masked generation with user-supplied models |
+| Pristine • Model Inpaint / Outpaint | Optional masked-generation companion for FLUX Fill and SD checkpoints |
 | Pristine • Split Alpha | Converts RGBA to RGB and a ComfyUI alpha mask (1 = transparent) |
 
 `selection_mask` uses 1 = selected for generation. Split Alpha uses ComfyUI's transparency-mask convention; these masks serve different purposes.
@@ -157,7 +175,7 @@ node --input-type=module --check < web/model_queue.js
 node tests/model_queue_check.mjs
 ```
 
-Eight Python tests exercise image repair, masks, staging, asset validation, tensor exports, lazy main-node model execution, preview preservation, preload/release without a photo, bounded retention and mocked sampler integration. Queue tests verify isolated upstream-only snapshots, unchanged workflow state, scoped result retrieval, preload/release graph isolation, transient history recovery, endpoint-specific errors and no duplicate submissions. A DOM/canvas integration check also passed against real HTTP editor routes: restore, brush, repair, apply, expansion, undo/redo, rotate/flip, comparison, lasso, blur, Detect, connection health, preload/release callbacks and a simulated model callback/preview without automatic Apply. This is not a full browser layout test; browser binary download was unavailable here. The standalone route/UI harness is `python tests/harness.py` at `http://127.0.0.1:8199`; it stubs the ComfyUI host only and uses real image operations and routes. It is for development, not installation. To reproduce the DOM/canvas check with that harness running in another terminal, install development-only packages and run:
+Nine Python tests exercise image repair, masks, staging, asset validation, tensor exports, lazy main-node model execution, preview preservation, preload/release without a photo, bounded retention, the FLUX Fill recipe (noise-mask-free conditioning, forced cfg 1.0, euler/normal defaults and positive-only guidance) and mocked sampler integration. Queue tests verify isolated upstream-only snapshots, unchanged workflow state, scoped result retrieval, preload/release graph isolation, transient history recovery, endpoint-specific errors and no duplicate submissions. A DOM/canvas integration check also passed against real HTTP editor routes: restore, brush, repair, apply, expansion, undo/redo, rotate/flip, comparison, lasso, blur, Detect, connection health, preload/release callbacks and a simulated model callback/preview without automatic Apply. This is not a full browser layout test; browser binary download was unavailable here. The standalone route/UI harness is `python tests/harness.py` at `http://127.0.0.1:8199`; it stubs the ComfyUI host only and uses real image operations and routes. It is for development, not installation. To reproduce the DOM/canvas check with that harness running in another terminal, install development-only packages and run:
 
 ```sh
 npm install --no-save --package-lock=false jsdom @napi-rs/canvas
