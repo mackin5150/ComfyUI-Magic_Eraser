@@ -28,16 +28,41 @@ def asset_hash(name):
 class PristineEditor:
     @classmethod
     def INPUT_TYPES(cls):
-        return {'required': {k: ('STRING', {'default': ''}) for k in ('edited_asset', 'mask_asset', 'original_asset')}}
+        return {
+            'required': {k: ('STRING', {'default': ''}) for k in ('edited_asset', 'mask_asset', 'original_asset')},
+            'optional': {
+                'model': ('MODEL', {'lazy': True}), 'vae': ('VAE', {'lazy': True}),
+                'positive': ('CONDITIONING', {'lazy': True}), 'negative': ('CONDITIONING', {'lazy': True}),
+                'conditioning_mode': (['regular_checkpoint', 'dedicated_inpaint_checkpoint'],),
+                'seed': ('INT', {'default':0, 'min':0, 'max':0xffffffffffffffff}),
+                'steps': ('INT', {'default':28, 'min':1, 'max':200}),
+                'cfg': ('FLOAT', {'default':5.0, 'min':0, 'max':30, 'step':0.1}),
+                'sampler_name': (['dpmpp_2m','euler','euler_ancestral','dpmpp_sde'],),
+                'scheduler': (['karras','normal','simple','sgm_uniform'],),
+                'denoise': ('FLOAT', {'default':1.0, 'min':0.01, 'max':1.0, 'step':0.01}),
+                'render_max_side': ('INT', {'default':1024, 'min':256, 'max':4096, 'step':64}),
+                'blend_pixels': ('INT', {'default':4, 'min':0, 'max':64}),
+                'model_request': ('STRING', {'default':''}),
+            }}
     RETURN_TYPES = ('IMAGE', 'MASK', 'IMAGE', 'IMAGE')
     RETURN_NAMES = ('image', 'selection_mask', 'original', 'rgba')
     FUNCTION = 'execute'
     CATEGORY = 'Pristine/Interactive Editor'
-    DESCRIPTION = 'Open Editor, upload or load a staged photo, edit and Apply to Node. Run only exports the applied assets.'
+    DESCRIPTION = 'Open Editor and edit interactively. Connect optional MODEL/VAE/conditioning for Remove with Model and Outpaint with Model. Normal Run exports applied assets.'
     @classmethod
     def IS_CHANGED(cls, **kw):
-        return tuple(asset_hash(kw.get(k,'')) for k in ('edited_asset','mask_asset','original_asset'))
-    def execute(self, edited_asset, mask_asset, original_asset):
+        return tuple(asset_hash(kw.get(k,'')) for k in ('edited_asset','mask_asset','original_asset')) + (kw.get('model_request',''),)
+    def check_lazy_status(self, model_request='', model=None, vae=None, positive=None, negative=None, **kw):
+        # Ordinary Save Image runs do not load or evaluate the model branch.
+        if not model_request: return []
+        return [k for k,v in {'model':model,'vae':vae,'positive':positive,'negative':negative}.items() if v is None]
+
+    def execute(self, edited_asset, mask_asset, original_asset, model=None, vae=None,
+                positive=None, negative=None, conditioning_mode='regular_checkpoint', seed=0,
+                steps=28, cfg=5.0, sampler_name='dpmpp_2m', scheduler='karras', denoise=1.0,
+                render_max_side=1024, blend_pixels=4, model_request=''):
+        if model_request and any(x is None for x in (model, vae, positive, negative)):
+            raise ValueError('Connect MODEL, VAE, positive and negative conditioning to the main editor node first.')
         if not edited_asset:
             raise ValueError('Open Editor, load a photo, then click Apply to Node before Run.')
         im = load(edited_asset).convert('RGBA')
@@ -45,8 +70,34 @@ class PristineEditor:
         mask = load(mask_asset).convert('L') if mask_asset else Image.new('L', im.size)
         if mask.size != im.size:
             raise ValueError('Selection mask dimensions differ from image')
+        selection = torch.from_numpy(np.array(mask).astype(np.float32)/255)[None,...]
+        if model_request:
+            from .model_nodes import PristineModelInpaint
+            generated = PristineModelInpaint().execute(
+                tensor(im), selection, model, vae, positive, negative, conditioning_mode,
+                seed, steps, cfg, sampler_name, scheduler, denoise, render_max_side, blend_pixels)[0]
+            rgb = np.clip(generated[0].detach().cpu().numpy()*255, 0, 255).round().astype(np.uint8)
+            # Regenerated cutouts become opaque; untouched alpha remains unchanged.
+            alpha = np.array(im.getchannel('A')).copy()
+            alpha[np.array(mask) > 0] = 255
+            im = Image.fromarray(np.dstack((rgb,alpha)))
+            result_assets = {
+                'edited_asset': persist(root(), im),
+                'mask_asset': persist(root(), Image.new('L', im.size)),
+                'original_asset': original_asset or persist(root(), original),
+            }
+            selection = torch.zeros_like(selection)
         rgba = torch.from_numpy(np.array(im).astype(np.float32) / 255)[None, ...]
-        return tensor(im), torch.from_numpy(np.array(mask).astype(np.float32)/255)[None,...], tensor(original), rgba
+        outputs = (tensor(im), selection, tensor(original), rgba)
+        if model_request:
+            return {'ui': {'pristine_result': [{'request_id':model_request, **result_assets}]}, 'result':outputs}
+        return outputs
+
+class PristineEditorRender(PristineEditor):
+    # Queue-only output variant lets the UI execute the editor without Save Image.
+    # The normal editor remains a regular node, so unrelated Run actions do not execute it.
+    OUTPUT_NODE = True
+    CATEGORY = 'Pristine/Internal'
 
 class PristineSend:
     @classmethod
@@ -126,3 +177,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {'PristineEditor':'Pristine • Open Photo Editor',
 from .model_nodes import PristineModelInpaint
 NODE_CLASS_MAPPINGS['PristineModelInpaint'] = PristineModelInpaint
 NODE_DISPLAY_NAME_MAPPINGS['PristineModelInpaint'] = 'Pristine • Model Inpaint / Outpaint'
+
+NODE_CLASS_MAPPINGS['PristineEditorRender'] = PristineEditorRender
+NODE_DISPLAY_NAME_MAPPINGS['PristineEditorRender'] = 'Pristine • Internal Editor Render (automatic)'

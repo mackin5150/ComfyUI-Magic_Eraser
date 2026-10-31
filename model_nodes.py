@@ -23,7 +23,7 @@ class PristineModelInpaint:
     CATEGORY = 'Pristine/Interactive Editor'
     DESCRIPTION = 'SD1.5/SDXL-style masked sampling, also for expanded outpaint canvases. Uses your MODEL, VAE and conditioning. Other architectures may require their native workflow.'
     def execute(self, image, mask, model, vae, positive, negative, conditioning_mode,
-                seed, steps, cfg, sampler_name, scheduler, denoise, render_max_side):
+                seed, steps, cfg, sampler_name, scheduler, denoise, render_max_side, blend_pixels=0):
         import nodes
         source = image[..., :3]
         if source.shape[0] != 1 or mask.shape[0] != 1:
@@ -45,4 +45,11 @@ class PristineModelInpaint:
         generated = nodes.VAEDecode().decode(vae,samples)[0]
         generated = F.interpolate(generated[...,:3].movedim(-1,1),size=(h,w),mode='bilinear',align_corners=False).movedim(1,-1)
         m = mask.to(device=source.device,dtype=source.dtype).clamp(0,1)[...,None]
+        if blend_pixels > 0:
+            import cv2
+            import numpy as np
+            binary = (mask[0].detach().cpu().numpy() > 0).astype(np.uint8)
+            distance = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+            feather = torch.from_numpy(np.minimum(distance / blend_pixels, 1.0)).to(device=source.device,dtype=source.dtype)
+            m = m * feather[None,...,None]
         return (source*(1-m)+generated.to(source.device)*m,)

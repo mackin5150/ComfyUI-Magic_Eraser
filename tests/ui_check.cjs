@@ -17,8 +17,13 @@ async function waitIdle(){for(let i=0;i<100;i++){if(!document.querySelector('but
  const {openEditor}=await import(pathToFileURL(path.resolve(__dirname,'../web/editor.js')));
  const fixture=createCanvas(320,240);const fc=fixture.getContext('2d');fc.fillStyle='#be9128';fc.fillRect(0,0,320,240);fc.fillStyle='black';fc.fillRect(140,100,30,30);const img=fixture.toDataURL();const mc=createCanvas(320,240);const m=mc.getContext('2d');m.fillStyle='black';m.fillRect(0,0,320,240);
  const initial=await (await request('/pristine_eraser/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:img,original:img,mask:mc.toDataURL()})})).json();
- let applied;
- await openEditor({state:initial,url:p=>base+p,request,onApply:r=>applied=r});
+ let applied, modelCalls=0, applyCalls=0;
+ await openEditor({state:initial,url:p=>base+p,request,onApply:r=>{applied=r;applyCalls++;},onModel:async(assets,onStatus)=>{
+     modelCalls++;onStatus('Simulated model fill…');
+     const generated=createCanvas(320,240);const g=generated.getContext('2d');g.fillStyle='#dfb940';g.fillRect(0,0,320,240);
+     return (await request('/pristine_eraser/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:generated.toDataURL(),mask:mc.toDataURL(),original:img})})).json();
+ }
+});
  const $=s=>document.querySelector(s);
  assert.equal($('.pe-display').width,320);
  // Paint a stroke around the black patch, then local inpaint via real server.
@@ -26,6 +31,10 @@ async function waitIdle(){for(let i=0;i<100;i++){if(!document.querySelector('but
  $('[data-action=heal]').click();await waitIdle();assert.match($('.pe-status').textContent,/Repair applied/);
  $('.pe-apply').click();await waitIdle();assert.ok(applied.edited_asset);
  const raw=await (await request('/pristine_eraser/asset/'+applied.edited_asset)).arrayBuffer();const fixed=new Image();fixed.src=Buffer.from(raw);await new Promise((res,rej)=>{fixed.onload=res;fixed.onerror=rej;});const c=createCanvas(320,240);c.getContext('2d').drawImage(fixed,0,0);assert.ok(c.getContext('2d').getImageData(155,115,1,1).data[0]>100);
+ const previouslyApplied=applied.edited_asset,previousApplyCalls=applyCalls;
+ $('[data-action=model]').click();await waitIdle();assert.equal(modelCalls,1);assert.equal(applied.edited_asset,previouslyApplied);assert.equal(applyCalls,previousApplyCalls);assert.match($('.pe-status').textContent,/Model fill ready/);
+ // Undo model preview restores the previous image and its selection.
+ $('[data-action=undo]').click();await waitIdle();
  $('[data-action=expand]').click();assert.equal(out.width,360);assert.equal(out.height,260);
  $('[data-action=undo]').click();await waitIdle();assert.equal(out.width,320);
  $('[data-action=redo]').click();await waitIdle();assert.equal(out.width,360);
@@ -37,5 +46,5 @@ async function waitIdle(){for(let i=0;i<100;i++){if(!document.querySelector('but
  $('[data-tool=detect]').click();out.onpointerdown({clientX:0,clientY:0,button:0,pointerId:1,preventDefault(){}});await waitIdle();assert.match($('.pe-status').textContent,/Color region selected/);
  $('.pe-apply').click();await waitIdle();assert.ok(applied.mask_asset);
  $('.pe-close').click();assert.equal(document.querySelector('.pe-dialog'),null);
- console.log('PASS: DOM/canvas editor integration: restore, brush, local heal, apply/assets, expand, undo/redo, rotate/flip, compare, lasso, blur, detect, close.');
+ console.log('PASS: DOM/canvas editor integration: restore, brush, local heal, apply/assets, model callback/preview without auto-Apply, expand, undo/redo, rotate/flip, compare, lasso, blur, detect, close.');
 })().catch(e=>{console.error(e);process.exit(1);});
