@@ -1,4 +1,4 @@
-import { requestJson, readJobHistory } from './network.js';
+import { requestJson, readJobHistory } from './network.js?v=0.5.0';
 // A separate prompt snapshot keeps interactive generation out of downstream Save Image.
 export function buildModelPrompt(output, nodeId, assets, requestId, action='edit') {
     const id = String(nodeId);
@@ -11,7 +11,7 @@ export function buildModelPrompt(output, nodeId, assets, requestId, action='edit
         if (!Array.isArray(target.inputs[name]))
             throw Error(`Connect ${name.toUpperCase()} to the main editor node first.`);
     }
-    Object.assign(target.inputs, assets, {model_request:requestId});
+    Object.assign(target.inputs,Object.fromEntries(['edited_asset','mask_asset','original_asset','editor_prompt','residency_key'].filter(k=>k in assets).map(k=>[k,assets[k]])),{model_request:requestId});
     target.class_type = 'PristineEditorRender';
     if(assets.editor_prompt){delete target.inputs.positive;delete target.inputs.negative;}
     if (action==='preload') {
@@ -36,8 +36,8 @@ export function buildModelPrompt(output, nodeId, assets, requestId, action='edit
     return Object.fromEntries(Object.entries(prompt).filter(([key]) => keep.has(key)));
 }
 
-export async function queueModelEdit({output,nodeId,assets,requestId,request,clientId,
-    pollMs=1000,timeoutMs=30*60*1000,onStatus=()=>{},action='edit',historyRetryMs=1000,serverReceipts=false}) {
+async function runModelEdit({output,nodeId,assets,requestId,request,clientId,
+    pollMs=1000,timeoutMs=30*60*1000,onStatus=()=>{},action='edit',historyRetryMs=1000,serverReceipts=false,eventState={}}) {
     const prompt = buildModelPrompt(output,nodeId,assets,requestId,action);
     // Never retry queue submissions: a dropped response may still have queued a job.
     const queued = await requestJson(request,'/prompt', {method:'POST',headers:{'Content-Type':'application/json'},
@@ -45,13 +45,16 @@ export async function queueModelEdit({output,nodeId,assets,requestId,request,cli
     if (!queued.prompt_id) throw Error('Queue returned no prompt_id. Check ComfyUI Queue before retrying.');
     onStatus(action==='preload'?'Preload queued. Loading diffusion model, CLIP and VAE…':action==='release'?'Releasing editor model retention…':'Model edit queued. Filling the selection…');
     const deadline = Date.now()+timeoutMs;
+    const session=assets.edited_asset?.startsWith('session:')?assets.edited_asset.split(':')[1]:null;
     while (Date.now()<deadline) {
+        if(eventState.result)return eventState.result;
+        if(eventState.error)throw Error(eventState.error);
         // Worker receipts can finish before ComfyUI History is finalized, and do
         // not depend on its UI-output nesting. Unique query + no-store defeats
         // stale empty responses through browser/tunnel caches.
         if(serverReceipts) {
             try {
-                const receipt=await requestJson(request,'/pristine_eraser/job/'+encodeURIComponent(requestId)+'?t='+Date.now(),{cache:'no-store'},'Read editor result');
+                const receipt=await requestJson(request,'/pristine_eraser/job/'+encodeURIComponent(requestId)+'?t='+Date.now()+(session?'&session='+encodeURIComponent(session):''),{cache:'no-store'},'Read editor result');
                 if(receipt.request_id!==requestId)throw Error('Editor returned a mismatched request ID.');
                 if(receipt.state==='failed')throw Object.assign(Error(receipt.error||'Model edit failed.'),{editorFailure:true});
                 if(receipt.state==='completed') {
@@ -80,4 +83,17 @@ export async function queueModelEdit({output,nodeId,assets,requestId,request,cli
         await new Promise(resolve=>setTimeout(resolve,pollMs));
     }
     throw Error('Model edit timed out. Check ComfyUI History for the completed job; your previous photo was kept.');
+}
+
+// Direct queue events complement HTTP receipts, particularly through remote proxies.
+export async function queueModelEdit(options) {
+    const state={};
+    const listener=event=>{
+        const data=event.detail;
+        if(data?.request_id!==options.requestId)return;
+        if(data.error)state.error=data.error;else state.result=data;
+    };
+    options.eventSource?.addEventListener('pristine_eraser_result',listener);
+    try{return await runModelEdit({...options,eventState:state});}
+    finally{options.eventSource?.removeEventListener('pristine_eraser_result',listener);}
 }

@@ -1,8 +1,8 @@
 import { app } from '../../scripts/app.js';
 import { api } from '../../scripts/api.js';
-import { openEditor } from './editor.js';
-import { requestJson } from './network.js';
-import { queueModelEdit } from './model_queue.js';
+import { openEditor } from './editor.js?v=0.5.0';
+import { requestJson } from './network.js?v=0.5.0';
+import { queueModelEdit } from './model_queue.js?v=0.5.0';
 app.registerExtension({
     name: 'Pristine.InteractiveEraser',
     nodeCreated(node) {
@@ -19,12 +19,13 @@ app.registerExtension({
         }
         async function runModelAction(action,assets={},onStatus=()=>{}) {
             const health=await requestJson((p,o)=>api.fetchApi(p,o),'/pristine_eraser/health',{},'Check editor connection');
+            if (health.version!=='0.5.0')throw Error('Editor/backend versions differ. Restart ComfyUI and hard-refresh this browser tab.');
             if (!health.preload) throw Error('Restart ComfyUI to load the updated editor backend.');
             const graph = await app.graphToPrompt();
             const token = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
             const requestId=action==='edit'?token:`${action}:${token}`;
             return queueModelEdit({output:graph.output,nodeId:node.id,
-                assets:{...assets,residency_key:node.properties.pristine_residency_key},requestId,action,serverReceipts:health.job_receipts===true,
+                assets:{...assets,residency_key:node.properties.pristine_residency_key},requestId,action,serverReceipts:health.job_receipts===true,eventSource:api,
                 clientId:api.clientId,request:(p,o)=>api.fetchApi(p,o),onStatus});
         }
         let managing=false;

@@ -71,3 +71,11 @@ assert.deepEqual(Object.keys(removal),['1','2']);assert.equal(removal['1'].input
 await assert.rejects(()=>queueModelEdit({output:graph,nodeId:1,assets,requestId:'bad-ledger',serverReceipts:true,
  request:async p=>p==='/prompt'?response({prompt_id:'bad'}):response({request_id:'bad-ledger',state:'failed',error:'model stopped'})}),/model stopped/);
 console.log('PASS: completed worker receipt replaces stale/empty History; removal instruction excludes unrelated workflow prompts; worker errors reach UI.');
+
+// Result notification is scoped to the request and listeners are removed afterward.
+let listener,removed=0;
+const eventSource={addEventListener:(name,fn)=>{listener=fn;},removeEventListener:(name,fn)=>{assert.equal(fn,listener);removed++;}};
+const fast=await queueModelEdit({output:graph,nodeId:1,assets,requestId:'event-job',eventSource,
+ request:async p=>{assert.equal(p,'/prompt');listener({detail:{request_id:'unrelated',edited_asset:'wrong'}});listener({detail:{request_id:'event-job',edited_asset:'direct.png'}});return response({prompt_id:'event-prompt'});}});
+assert.equal(fast.edited_asset,'direct.png');assert.equal(removed,1);
+console.log('PASS: direct completion event updates the waiting request without History, ignores unrelated jobs and removes the listener.');

@@ -133,6 +133,49 @@ class SuiteTests(unittest.TestCase):
                 self.assertEqual(sampler.call_args.args[4][0][1]['text'],'continue the leather texture')
         self.assertEqual(p.PristineEditor().check_lazy_status(model_request='x',editor_prompt='remove'),['model','vae','clip'])
 
+    def test_session_final_only_save_and_cleanup(self):
+        from pristine_test.session_store import SessionStore
+        from unittest.mock import patch
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            st=SessionStore(Path(d)/'temp',Path(d)/'output',Path(d)/'legacy')
+            first,other=st.create(),st.create()
+            ref=st.persist(Image.new('RGB',(12,10),'red'),first)
+            st.persist(Image.new('L',(12,10),255),first)
+            other_ref=st.persist(Image.new('RGB',(2,2),'blue'),other)
+            self.assertTrue(st.resolve(ref).exists())
+            with st.active_job(ref):
+                with self.assertRaises(ValueError):st.cleanup(first)
+                with self.assertRaises(ValueError):st.save_final(Image.new('RGB',(12,10)),first)
+            with patch.object(Image.Image,'save',side_effect=OSError('disk full')):
+                with self.assertRaises(OSError):st.save_final(Image.new('RGB',(12,10)),first)
+            self.assertTrue(st.resolve(ref).exists())
+            final=st.save_final(Image.new('RGB',(12,10),'green'),first)
+            self.assertFalse(st.directory(first,False).exists())
+            self.assertTrue(st.resolve(other_ref).exists())
+            self.assertEqual(len(list(st.output_root.glob('*.png'))),1)
+            self.assertEqual(st.save_final(Image.new('RGB',(12,10),'black'),first)['edited_asset'],final['edited_asset'])
+            self.assertEqual(len(list(st.output_root.glob('*.png'))),1)
+            for bad in ('../other','/tmp','0'*31,'final:../bad.png','session:../bad:x'):
+                with self.assertRaises(ValueError):st.directory(bad)
+            st.cleanup(first);st.cleanup(other)
+
+    def test_temporary_model_output_survives_as_single_final(self):
+        from unittest.mock import patch
+        st=p.store();sid=st.create()
+        refs=[st.persist(x,sid) for x in (Image.new('RGB',(32,32)),Image.new('L',(32,32),255),Image.new('RGB',(32,32)))]
+        with patch.object(p.PristineModelInpaint,'execute',return_value=(torch.ones(1,32,32,3),)):
+            render=p.PristineEditorRender().execute(*refs,model=object(),vae=object(),positive=[],negative=[],model_request='temp-render')
+        result=render['ui']['pristine_result'][0]
+        self.assertTrue(result['edited_asset'].startswith('session:'+sid+':'))
+        self.assertEqual(p.jobs(refs[0]).read('temp-render')['state'],'completed')
+        final=st.save_final(p.load(result['edited_asset']),sid)
+        self.assertFalse(st.directory(sid,False).exists())
+        image,mask,original,rgba=p.PristineEditor().execute(final['edited_asset'],'',final['original_asset'])
+        self.assertTrue(torch.all(image==1));self.assertFalse(torch.any(mask))
+        self.assertEqual(original.shape,image.shape)
+
     def test_staging_batch_selection(self):
         batch=torch.stack([torch.zeros(12,16,3),torch.ones(12,16,3)])
         p.PristineSend().execute(batch,'example',1)

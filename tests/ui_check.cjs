@@ -32,13 +32,13 @@ async function waitIdle(){for(let i=0;i<100;i++){if(!document.querySelector('but
      const selected=createCanvas(320,240),sc=selected.getContext('2d');sc.drawImage(await asset(assets.mask_asset),0,0);
      const md=sc.getImageData(0,0,320,240);for(let i=0;i<md.data.length;i+=4){md.data[i+3]=md.data[i];md.data[i]=md.data[i+1]=md.data[i+2]=255;}sc.putImageData(md,0,0);
      sc.globalCompositeOperation='source-in';sc.fillStyle=modelCalls===1?'#ff0000':'#0000ff';sc.fillRect(0,0,320,240);g.drawImage(selected,0,0);
-     const result=await (await request('/pristine_eraser/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:generated.toDataURL(),mask:mc.toDataURL(),original:img})})).json();
+     const result=await (await request('/pristine_eraser/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:generated.toDataURL(),mask:mc.toDataURL(),original:img,session_id:assets.session_id})})).json();
      return {...result,source_asset:mismatch?'wrong-source':assets.edited_asset};
  }});
  const $=s=>document.querySelector(s),out=$('.pe-display');
  const paint=(x,y)=>{out.onpointerdown({clientX:x,clientY:y,button:0,pointerId:1,preventDefault(){}});out.onpointermove({clientX:x+5,clientY:y});out.onpointerup({});};
  assert.equal($('.pe-revision').textContent,'Original');
- $('[data-action=connection]').click();await waitIdle();assert.match($('.pe-status').textContent,/version 0.4.0/);
+ $('[data-action=connection]').click();await waitIdle();assert.match($('.pe-status').textContent,/version 0.5.0/);
  $('[data-action=preload]').click();await waitIdle();assert.equal(preloadCalls,1);
  $('[data-action=release]').click();await waitIdle();assert.equal(releaseCalls,1);
  paint(150,115);$('[data-action=model]').click();await waitIdle();
@@ -51,7 +51,7 @@ async function waitIdle(){for(let i=0;i<100;i++){if(!document.querySelector('but
  $('[data-action=compare]').click();assert.deepEqual(pixel(out,155,115),[0,0,0]);$('[data-action=compare]').click();assert.deepEqual(pixel(out,155,115),[255,0,0]);
  paint(100,100);fail=true;$('[data-action=model]').click();await waitIdle();assert.match($('.pe-status').textContent,/Simulated generation failure/);assert.equal($('.pe-revision').textContent,'Edit 2');fail=false;
  mismatch=true;$('[data-action=model]').click();await waitIdle();assert.match($('.pe-status').textContent,/different source/);assert.equal($('.pe-revision').textContent,'Edit 2');mismatch=false;
- $('[data-action=clear]').click();$('.pe-apply').click();await waitIdle();assert.equal(applyCalls,1);assert.equal(applied.revision,2);
+ $('[data-action=clear]').click();$('.pe-apply').click();await waitIdle();assert.equal(applyCalls,1);assert.equal(applied.revision,2);assert.match(applied.edited_asset,/^final:/);assert.equal(applied.mask_asset,'');
  const saved=createCanvas(320,240);saved.getContext('2d').drawImage(await asset(applied.edited_asset),0,0);assert.deepEqual(pixel(saved,55,50),[0,0,255]);
  $('[data-action=expand]').click();assert.equal(out.width,360);assert.equal(out.height,260);
  $('[data-action=undo]').click();await waitIdle();assert.equal(out.width,320);
@@ -62,6 +62,6 @@ async function waitIdle(){for(let i=0;i<100;i++){if(!document.querySelector('but
  $('[data-action=clear]').click();$('[data-tool=lasso]').click();paint(50,50);
  $('[data-tool=brush]').click();paint(70,70);$('[data-action=blur]').click();assert.match($('.pe-status').textContent,/blurred/);
  $('[data-tool=detect]').click();out.onpointerdown({clientX:0,clientY:0,button:0,pointerId:1,preventDefault(){}});await waitIdle();assert.match($('.pe-status').textContent,/Color region selected/);
- $('.pe-close').click();assert.equal(document.querySelector('.pe-dialog'),null);
- console.log('PASS: real asset routes; two cumulative model edits visibly repaint the canvas; model repair; immutable original; revision undo/redo; source mismatch/failure preserve the current edit; Apply saves the newest result; transforms and selection.');
+ $('.pe-close').click();await new Promise(r=>setTimeout(r,30));assert.equal(document.querySelector('.pe-dialog'),null);
+ console.log('PASS: final-only save; real asset routes; two cumulative model edits visibly repaint the canvas; model repair; immutable original; revision undo/redo; source mismatch/failure preserve the current edit; Apply saves the newest result; transforms and selection.');
 })().catch(e=>{console.error(e);process.exit(1);});
