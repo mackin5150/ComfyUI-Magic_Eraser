@@ -55,3 +55,19 @@ let submitted=0;
 await assert.rejects(()=>queueModelEdit({output:graph,nodeId:1,assets,requestId:'x',request:async()=>{submitted++;throw new TypeError('Failed to fetch');}}),/Queue edit.*Failed to fetch/);
 assert.equal(submitted,1);
 console.log('PASS: preload/release graph isolation, endpoint-specific errors, upload limits, HTML proxy errors, safe history retries and no duplicate queue submissions.');
+
+// A model result is recovered even when ComfyUI History remains an empty snapshot.
+let receiptReads=0;const recoveredReceipt={request_id:'ledger-edit',edited_asset:'finished.png',source_asset:assets.edited_asset};
+const receiptResult=await queueModelEdit({output:graph,nodeId:1,assets,requestId:'ledger-edit',serverReceipts:true,pollMs:1,historyRetryMs:1,
+ request:async(p,o)=>{
+   if(p==='/prompt')return response({prompt_id:'ledger-prompt'});
+   if(p.startsWith('/pristine_eraser/job/')){assert.equal(o.cache,'no-store');return response(++receiptReads===1?{request_id:'ledger-edit',state:'running',phase:'Sampling'}:{request_id:'ledger-edit',state:'completed',result:recoveredReceipt});}
+   return response({});
+ }});
+assert.equal(receiptResult.edited_asset,'finished.png');assert.equal(receiptReads,2);
+const removeGraph=JSON.parse(JSON.stringify(graph));removeGraph['1'].inputs.clip=['2',1];
+const removal=buildModelPrompt(removeGraph,1,{...assets,editor_prompt:'continue the surrounding photo'},'remove');
+assert.deepEqual(Object.keys(removal),['1','2']);assert.equal(removal['1'].inputs.positive,undefined);
+await assert.rejects(()=>queueModelEdit({output:graph,nodeId:1,assets,requestId:'bad-ledger',serverReceipts:true,
+ request:async p=>p==='/prompt'?response({prompt_id:'bad'}):response({request_id:'bad-ledger',state:'failed',error:'model stopped'})}),/model stopped/);
+console.log('PASS: completed worker receipt replaces stale/empty History; removal instruction excludes unrelated workflow prompts; worker errors reach UI.');

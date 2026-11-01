@@ -94,6 +94,45 @@ class SuiteTests(unittest.TestCase):
                     self.assertFalse(result['ui']['pristine_result'][0]['retained'])
                     self.assertEqual(len(resident._sessions),0)
 
+    def test_durable_receipts_and_model_error(self):
+        from unittest.mock import patch
+        from pristine_test.jobs import JobReceipts
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            writer=JobReceipts(d)
+            self.assertEqual(writer.read('x')['state'],'waiting')
+            writer.write('x',state='completed',result={'edited_asset':'ok'})
+            self.assertEqual(JobReceipts(d).read('x')['result']['edited_asset'],'ok')
+            self.assertEqual(writer.path('../../x').parent,writer.root)
+        im=Image.new('RGB',(32,32));m=Image.new('L',im.size,255)
+        names=[persist(p.root(),x) for x in (im,m,im)]
+        with patch.object(p.PristineModelInpaint,'execute',side_effect=RuntimeError('sample failed')):
+            with self.assertRaisesRegex(RuntimeError,'sample failed'):
+                p.PristineEditorRender().execute(*names,model=object(),vae=object(),positive=[],negative=[],model_request='receipt-fail')
+        self.assertEqual(p.jobs().read('receipt-fail')['state'],'failed')
+        with patch.object(p.PristineModelInpaint,'execute',return_value=(torch.ones(1,32,32,3),)):
+            result=p.PristineEditorRender().execute(*names,model=object(),vae=object(),positive=[],negative=[],model_request='receipt-ok')
+        receipt=p.jobs().read('receipt-ok')
+        self.assertEqual(receipt['state'],'completed')
+        self.assertEqual(receipt['result'],result['ui']['pristine_result'][0])
+        self.assertEqual(receipt['result']['source_asset'],names[0])
+
+    def test_editor_instruction_replaces_unrelated_conditioning(self):
+        from unittest.mock import patch
+        import sys, types
+        encoded=[]
+        class Encoder:
+            def encode(self,clip,text):encoded.append(text);return ([['encoded',{'text':text}]],)
+        im=Image.new('RGB',(32,32));m=Image.new('L',im.size,255)
+        names=[persist(p.root(),x) for x in (im,m,im)]
+        with patch.dict(sys.modules,{'nodes':types.SimpleNamespace(CLIPTextEncode=Encoder)}):
+            with patch.object(p.PristineModelInpaint,'execute',return_value=(torch.ones(1,32,32,3),)) as sampler:
+                p.PristineEditorRender().execute(*names,model=object(),vae=object(),clip=object(),
+                    positive=[['unrelated dinner scene',{}]],negative=[],editor_prompt='continue the leather texture',model_request='instruction-test')
+                self.assertEqual(encoded,['continue the leather texture',''])
+                self.assertEqual(sampler.call_args.args[4][0][1]['text'],'continue the leather texture')
+        self.assertEqual(p.PristineEditor().check_lazy_status(model_request='x',editor_prompt='remove'),['model','vae','clip'])
+
     def test_staging_batch_selection(self):
         batch=torch.stack([torch.zeros(12,16,3),torch.ones(12,16,3)])
         p.PristineSend().execute(batch,'example',1)

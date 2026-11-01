@@ -11,12 +11,16 @@ from server import PromptServer
 from .core import decode, encode, heal, detect, persist, safe_path
 
 from .residency import RESIDENCY
+from .jobs import JobReceipts
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 WEB_DIRECTORY = './web'
 
 def root():
     return Path(folder_paths.get_input_directory()) / 'pristine_eraser'
+
+def jobs():
+    return JobReceipts(root() / "jobs")
 
 def load(name):
     with Image.open(safe_path(root(), name)) as im:
@@ -50,6 +54,7 @@ class PristineEditor:
                 'clip': ('CLIP', {'lazy':True}),
                 'keep_loaded': ('BOOLEAN', {'default':True}),
                 'residency_key': ('STRING', {'default':''}),
+                'editor_prompt': ('STRING', {'default':''}),
             }, 'hidden': {'unique_id':'UNIQUE_ID'}}
     RETURN_TYPES = ('IMAGE', 'MASK', 'IMAGE', 'IMAGE')
     RETURN_NAMES = ('image', 'selection_mask', 'original', 'rgba')
@@ -59,10 +64,12 @@ class PristineEditor:
     @classmethod
     def IS_CHANGED(cls, **kw):
         return tuple(asset_hash(kw.get(k,'')) for k in ('edited_asset','mask_asset','original_asset')) + (kw.get('model_request',''),)
-    def check_lazy_status(self, model_request='', model=None, vae=None, positive=None, negative=None, clip=None, **kw):
+    def check_lazy_status(self, model_request='', model=None, vae=None, positive=None, negative=None, clip=None, editor_prompt='', **kw):
         # Ordinary Save Image runs do not load or evaluate the model branch.
         if not model_request or model_request.startswith('release:'): return []
         if model_request.startswith('preload:'):
+            return [k for k,v in {'model':model,'vae':vae,'clip':clip}.items() if v is None]
+        if editor_prompt:
             return [k for k,v in {'model':model,'vae':vae,'clip':clip}.items() if v is None]
         missing = [k for k,v in {'model':model,'vae':vae,'positive':positive,'negative':negative}.items() if v is None]
         # CLIP is not needed for sampling when conditioning is already computed.
@@ -72,7 +79,7 @@ class PristineEditor:
     def execute(self, edited_asset, mask_asset, original_asset, model=None, vae=None,
                 positive=None, negative=None, conditioning_mode='regular_checkpoint', seed=0,
                 steps=28, cfg=5.0, guidance=30.0, sampler_name='dpmpp_2m', scheduler='karras', denoise=1.0,
-                render_max_side=1024, blend_pixels=4, model_request='', clip=None, keep_loaded=True, residency_key='', unique_id=None):
+                render_max_side=1024, blend_pixels=4, model_request='', clip=None, keep_loaded=True, residency_key='', unique_id=None, editor_prompt=''):
         key = residency_key or str(unique_id or 'default')
         if model_request.startswith('release:'):
             status = RESIDENCY.release(key)
@@ -82,6 +89,12 @@ class PristineEditor:
                 raise ValueError('Connect MODEL, VAE and CLIP to the main node before Preload Models.')
             status = RESIDENCY.hold(key, model, vae, clip, warm=True)
             return {'ui': {'pristine_result': [{'request_id':model_request, **status}]}, 'result': self._empty_outputs()}
+        if model_request and editor_prompt:
+            if any(x is None for x in (model, vae, clip)):
+                raise ValueError('Connect MODEL, VAE and CLIP for the editor removal instruction.')
+            import nodes
+            positive = nodes.CLIPTextEncode().encode(clip, editor_prompt)[0]
+            negative = nodes.CLIPTextEncode().encode(clip, '')[0]
         if model_request and any(x is None for x in (model, vae, positive, negative)):
             raise ValueError('Connect MODEL, VAE, positive and negative conditioning to the main editor node first.')
         if not edited_asset:
@@ -94,9 +107,11 @@ class PristineEditor:
         selection = torch.from_numpy(np.array(mask).astype(np.float32)/255)[None,...]
         if model_request:
             from .model_nodes import PristineModelInpaint
+            jobs().write(model_request, state='running', phase='Sampling the selection', source_asset=edited_asset)
             generated = PristineModelInpaint().execute(
                 tensor(im), selection, model, vae, positive, negative, conditioning_mode,
                 seed, steps, cfg, sampler_name, scheduler, denoise, render_max_side, blend_pixels, guidance=guidance)[0]
+            jobs().write(model_request, state='running', phase='Preparing the edited image', source_asset=edited_asset)
             rgb = np.clip(generated[0].detach().cpu().numpy()*255, 0, 255).round().astype(np.uint8)
             # Regenerated cutouts become opaque; untouched alpha remains unchanged.
             alpha = np.array(im.getchannel('A')).copy()
@@ -106,6 +121,9 @@ class PristineEditor:
                 'edited_asset': persist(root(), im),
                 'mask_asset': persist(root(), Image.new('L', im.size)),
                 'original_asset': original_asset or persist(root(), original),
+                'source_asset': edited_asset,
+                'prompt_source': 'editor_instruction' if editor_prompt else 'workflow_conditioning',
+                'prompt_used': editor_prompt if editor_prompt else None,
             }
             selection = torch.zeros_like(selection)
             if keep_loaded:
@@ -130,6 +148,23 @@ class PristineEditorRender(PristineEditor):
     # The normal editor remains a regular node, so unrelated Run actions do not execute it.
     OUTPUT_NODE = True
     CATEGORY = 'Pristine/Internal'
+    def execute(self, edited_asset, mask_asset, original_asset, model=None, vae=None,
+                positive=None, negative=None, conditioning_mode='regular_checkpoint', seed=0,
+                steps=28, cfg=5.0, guidance=30.0, sampler_name='dpmpp_2m', scheduler='karras', denoise=1.0,
+                render_max_side=1024, blend_pixels=4, model_request='', clip=None, keep_loaded=True, residency_key='', unique_id=None, editor_prompt=''):
+        values = {k:v for k,v in locals().items() if k not in ('self','__class__')}
+        request_id = model_request
+        if not request_id: return super().execute(**values)
+        jobs().write(request_id, state='running', phase='Loading models' if request_id.startswith('preload:') else 'Preparing the edit')
+        try:
+            result = super().execute(**values)
+            receipt = result['ui']['pristine_result'][0]
+            jobs().write(request_id, state='completed', result=receipt)
+            return result
+        except Exception as exc:
+            jobs().write(request_id, state='failed', error=str(exc))
+            raise
+
 
 class PristineSend:
     @classmethod
@@ -179,7 +214,13 @@ def operation(b):
 
 @PromptServer.instance.routes.get('/pristine_eraser/health')
 async def health(request):
-    return web.json_response({'ok': True, 'version': VERSION, 'preload': True})
+    return web.json_response({'ok': True, 'version': VERSION, 'preload': True, 'job_receipts': True}, headers={'Cache-Control':'no-store'})
+
+@PromptServer.instance.routes.get('/pristine_eraser/job/{request_id}')
+async def job_status(request):
+    try: receipt = jobs().read(request.match_info['request_id'])
+    except ValueError as exc: return web.json_response({'error':str(exc)}, status=400)
+    return web.json_response(receipt, headers={'Cache-Control':'no-store, max-age=0'})
 
 @PromptServer.instance.routes.post('/pristine_eraser/process')
 async def do_process(request): return await process(request, operation)
@@ -198,7 +239,7 @@ async def get_asset(request):
     try: path = safe_path(root(), request.match_info['name'])
     except ValueError: raise web.HTTPBadRequest()
     if not path.is_file(): raise web.HTTPNotFound()
-    return web.FileResponse(path)
+    return web.FileResponse(path, headers={'Cache-Control':'no-store'})
 
 @PromptServer.instance.routes.get('/pristine_eraser/slot')
 async def get_slot(request):

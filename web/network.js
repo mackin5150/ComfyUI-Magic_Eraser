@@ -24,7 +24,7 @@ export async function requestJson(request,path,options={},phase='Request') {
 export async function readJobHistory(request,path,{attempts=8,delayMs=1000}={}) {
     let last;
     for(let i=0;i<attempts;i++) {
-        try{return await requestJson(request,path,{},'Read model job');}
+        try{return await requestJson(request,path,{cache:'no-store'},'Read model job');}
         catch(e){last=e;if(i+1<attempts)await new Promise(r=>setTimeout(r,delayMs));}
     }
     throw last;

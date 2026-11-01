@@ -35,7 +35,7 @@ For portable Windows, use `python_embeded\python.exe -m pip install -r ComfyUI\c
 2. Connect editor `image` → Save Image `images` (or `rgba` for transparency).
 3. Click **Open Photo Editor → Upload photo**.
 4. Paint with Brush, circle with Lasso, or select a connected color with Detect.
-5. Choose **Quick repair (local)** for fast local repair, or **Remove with Model** after connecting a model as described below. Clear the red selection to inspect the result. Undo reverses both image edits and selection edits.
+5. Choose **Repair with Model** to reconstruct the selection using the loaded model, or **Remove with Model** after connecting a model as described below. Clear the red selection to inspect the result. Undo reverses both image edits and selection edits.
 6. Click **Apply to Node**, close the editor, and click **Run**. Save Image writes the finished image to the normal ComfyUI output folder.
 
 The three asset fields on the node are managed by the editor. Leave them alone. Applying creates immutable working PNGs under `ComfyUI/input/pristine_eraser/`; it does not create a final output image. Your workflow stores their filenames. Keep that folder with workflow backups and copy it when moving workflows to another machine. Old working assets are retained; deleting them breaks workflows that reference them. Closing without Apply discards uncommitted changes.
@@ -70,7 +70,7 @@ Refresh the model list or restart, then select it in **Load Checkpoint**. For a 
 | Negative CLIP Text Encode | Main editor `negative` |
 | Main editor `image` | Save Image `images` |
 
-Set the positive prompt to describe the finished background/foreground you want revealed, such as “continuous yellow leather surface, matching grain, natural lighting.” Include enough selection margin around the entire unwanted object, its shadow and its edges. The model reconstructs plausible content; it cannot recover the actual hidden scene or guarantee an invisible repair every time.
+For the conventional companion workflow, set the positive prompt to describe the finished background/foreground you want revealed, such as “continuous yellow leather surface, matching grain, natural lighting.” Include enough selection margin around the entire unwanted object, its shadow and its edges. The model reconstructs plausible content; it cannot recover the actual hidden scene or guarantee an invisible repair every time.
 
 ### FLUX Fill checkpoints (AGFlux_fill and similar)
 
@@ -86,7 +86,7 @@ Wire standard ComfyUI loaders into the main editor:
 | Positive CLIP Text Encode | Main editor `positive` |
 | Negative CLIP Text Encode | Main editor `negative` |
 
-Set the positive prompt to describe what should appear in the selection, as with SD checkpoints; the negative prompt can be empty for FLUX Fill. Use the **guidance** widget (default 30) instead of cfg: guidance carries the model strength while cfg is forced to 1.0 on FLUX models. Leave sampler/scheduler at their defaults and the node switches them to euler/normal automatically; your own choice is respected.
+For conventional companion workflows, set the positive prompt to describe what should appear in the selection; the negative prompt can be empty for FLUX Fill. Use the **guidance** widget (default 30) instead of cfg: guidance carries the model strength while cfg is forced to 1.0 on FLUX models. Leave sampler/scheduler at their defaults and the node switches them to euler/normal automatically; your own choice is respected.
 
 The first run loads the ~12 GB diffusion weights plus T5, so click **Preload Models** once (with `clip` connected as above) before editing. With keep_loaded enabled, ComfyUI's model manager keeps the bundle resident between queued runs, so repeated edits do not re-read the checkpoint.
 
@@ -102,7 +102,7 @@ Retention avoids losing the bundle to garbage collection and requests device loa
 
 ### Diagnose “Failed to fetch”
 
-Click **Check connection** in the editor. A successful result reports backend version `0.3.0`. A 404 means the updated backend route is missing or the request is being routed incorrectly; restart ComfyUI and refresh the browser, then check the URL/proxy if it persists.
+Click **Check connection** in the editor. A successful result reports backend version `0.4.0`. A 404 means the updated backend route is missing or the request is being routed incorrectly; restart ComfyUI and refresh the browser, then check the URL/proxy if it persists.
 
 Requests now report their phase and endpoint: photo upload, image operation, queue submission, or job-history polling. HTTP 413 identifies an upload size limit; non-JSON responses identify a possible proxy/login/error page. A raw fetch failure means the browser did not receive a usable response, which by itself does not establish whether model loading, the server, or the network caused the interruption. Inspect the ComfyUI terminal at the same time.
 
@@ -113,11 +113,11 @@ Read-only history checks retry up to eight times (one second apart) after connec
 1. Connect the model ports above and choose the main node's sampling settings.
 2. Open Photo Editor and upload/load the photo.
 3. Paint or lasso over the unwanted item.
-4. Click **Remove with Model**. The photo stays in the editor while ComfyUI processes the model job, then the filled result appears automatically.
+4. Check the editor’s **Fill instruction** (the default asks for a continuation of the surrounding photo), then click **Remove with Model**. The photo stays in the editor while ComfyUI processes the model job, then the filled result appears automatically.
 5. Inspect it, Undo or refine the selection if needed, then **Apply to Node**.
 6. Close the editor and click **Run** to Save Image. This final save does not regenerate the image.
 
-**Quick repair (local)** remains available for small blemishes and does not use the model. Model buttons do not fall back to local repair if connections are missing; they show the missing connection instead.
+**Repair with Model**, **Remove with Model**, and **Outpaint with Model** all use the loaded model. Crop, rotate, flip, blur and alpha cutout remain deterministic local operations; brush/lasso/deselect define the mask. Model buttons do not fall back to local repair if connections are missing; they show the missing connection instead.
 
 ### Outpaint inside the editor
 
@@ -134,9 +134,17 @@ Select `regular_checkpoint` for ordinary SD1.5/SDXL checkpoints, or `dedicated_i
 
 The model renders at `render_max_side` (default 1024) and returns the editor's full canvas size. Larger render sizes use more VRAM. Very thin masks can disappear when downscaled; use a larger render size for small details. New outpaint areas start neutral gray. After rotation/expansion, the original output can have different dimensions from the working image.
 
+### Successive edits update the current image
+
+Each completed model fill replaces the editor's working photo immediately and clears its red selection. The header advances to **Edit 1**, **Edit 2**, and so on. The next model operation uploads that current working image, so edits build on one another without clicking Apply between operations. **Show original** still displays the initial photo; **Undo/Redo** restore the image, mask and edit revision. This is a cumulative edit history, not a stack of independently blendable layers. Click Apply to Node only when you want to commit the current photo for normal Run / Save Image.
+
+Model image downloads use ComfyUI's authenticated request helper, bypass caches, validate the source image and dimensions, and keep the current edit if downloading/decoding fails. A generated result cannot replace a different source session. The backend writes a small completion receipt before the queue job finishes; the editor can retrieve the finished asset even if ComfyUI History is still empty or omits custom UI output. Loading/preparing/sampling phases are reported. These receipts live under `input/pristine_eraser/jobs/` with the other working assets. They are not live denoising previews.
+
+**Remove** and **Repair** use the visible editor **Fill instruction**, encoded using the main node's connected CLIP. They do not reuse unrelated workflow prompt conditioning. This prevents a sample workflow prompt about an office or people from being silently inherited by the removal button. Outpaint uses an instruction to extend the surrounding photograph. The conventional companion node continues to respect its connected positive/negative conditioning. Generative quality is still model-dependent; a seamless reconstruction of hidden content is not guaranteed.
+
 ### Execution and saving
 
-The model button queues an isolated snapshot of the main editor and its upstream model/prompt connections using ComfyUI's normal execution queue. It excludes downstream Save Image and unrelated output branches. GPU work stays in the ComfyUI worker; it does not run inside an HTTP image route. A queue-only internal node variant supplies the result back to the editor. You never need to add that internal node manually.
+The model button queues an isolated snapshot of the main editor and its upstream model/CLIP connections using ComfyUI's normal execution queue. It excludes downstream Save Image and unrelated output branches. GPU work stays in the ComfyUI worker; it does not run inside an HTTP image route. A queue-only internal node variant supplies the result back to the editor. You never need to add that internal node manually.
 
 The result is a preview until you choose Apply to Node. Failure or interruption keeps your previous photo; Undo can revert a completed fill. The generation request is not stored in your main workflow, so ordinary Run exports the applied photo and does not repeat generation. Model inputs are lazy and do not load during a normal save. Use the main node at the root of the workflow canvas; nested subgraph model editing is not supported in this version. Jobs time out in the editor after 30 minutes; inspect ComfyUI History if a job runs longer.
 
@@ -175,7 +183,7 @@ node --input-type=module --check < web/model_queue.js
 node tests/model_queue_check.mjs
 ```
 
-Nine Python tests exercise image repair, masks, staging, asset validation, tensor exports, lazy main-node model execution, preview preservation, preload/release without a photo, bounded retention, the FLUX Fill recipe (noise-mask-free conditioning, forced cfg 1.0, euler/normal defaults and positive-only guidance) and mocked sampler integration. Queue tests verify isolated upstream-only snapshots, unchanged workflow state, scoped result retrieval, preload/release graph isolation, transient history recovery, endpoint-specific errors and no duplicate submissions. A DOM/canvas integration check also passed against real HTTP editor routes: restore, brush, repair, apply, expansion, undo/redo, rotate/flip, comparison, lasso, blur, Detect, connection health, preload/release callbacks and a simulated model callback/preview without automatic Apply. This is not a full browser layout test; browser binary download was unavailable here. The standalone route/UI harness is `python tests/harness.py` at `http://127.0.0.1:8199`; it stubs the ComfyUI host only and uses real image operations and routes. It is for development, not installation. To reproduce the DOM/canvas check with that harness running in another terminal, install development-only packages and run:
+Eleven Python tests exercise image repair, masks, staging, asset validation, tensor exports, lazy main-node model execution, preview preservation, preload/release without a photo, bounded retention, the FLUX Fill recipe (noise-mask-free conditioning, forced cfg 1.0, euler/normal defaults and positive-only guidance) durable completion/error receipts, editor-instruction conditioning and mocked sampler integration. Queue tests verify isolated upstream-only snapshots, unchanged workflow state, scoped result retrieval, preload/release graph isolation, transient history recovery, endpoint-specific errors and no duplicate submissions. A DOM/canvas integration check also passed against real HTTP editor routes: restore, brush, repair, apply, expansion, undo/redo, rotate/flip, comparison, lasso, blur, Detect, connection health, preload/release callbacks and a simulated model callback/preview without automatic Apply. The cumulative-edit regression also asserts actual displayed canvas pixels after two successive fills, confirms the second input contains the first result, verifies Undo/Redo and original comparison, rejects stale-source results, and checks Apply saves the latest image. This is not a full browser layout test; browser binary download was unavailable here. The standalone route/UI harness is `python tests/harness.py` at `http://127.0.0.1:8199`; it stubs the ComfyUI host only and uses real image operations and routes. It is for development, not installation. To reproduce the DOM/canvas check with that harness running in another terminal, install development-only packages and run:
 
 ```sh
 npm install --no-save --package-lock=false jsdom @napi-rs/canvas

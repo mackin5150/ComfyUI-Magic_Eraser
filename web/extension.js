@@ -9,7 +9,7 @@ app.registerExtension({
         if (node.comfyClass !== 'PristineEditor') return;
         node.properties ||= {};
         node.properties.pristine_residency_key ||= globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
-        for (const name of ['model_request','residency_key']) {
+        for (const name of ['model_request','residency_key','editor_prompt']) {
             const internal = node.widgets.find(w=>w.name===name);
             if (internal) {
                 internal.type='converted-widget';
@@ -24,7 +24,7 @@ app.registerExtension({
             const token = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
             const requestId=action==='edit'?token:`${action}:${token}`;
             return queueModelEdit({output:graph.output,nodeId:node.id,
-                assets:{...assets,residency_key:node.properties.pristine_residency_key},requestId,action,
+                assets:{...assets,residency_key:node.properties.pristine_residency_key},requestId,action,serverReceipts:health.job_receipts===true,
                 clientId:api.clientId,request:(p,o)=>api.fetchApi(p,o),onStatus});
         }
         let managing=false;
@@ -38,11 +38,13 @@ app.registerExtension({
         });
         node.addWidget('button', 'Open Photo Editor', null, () => {
             const state = Object.fromEntries(node.widgets.filter(w => w.name.endsWith('_asset')).map(w => [w.name, w.value]));
+            state.revision=node.properties.pristine_revision||0;
             openEditor({ state, url: p => api.apiURL(p), request: (p, options) => api.fetchApi(p, options),
                 onModel:(assets,onStatus)=>runModelAction('edit',assets,onStatus),
                 onPreload:onStatus=>runModelAction('preload',{},onStatus),
                 onRelease:onStatus=>runModelAction('release',{},onStatus),
                 onApply(result) {
+                    node.properties.pristine_revision=result.revision||0;
                     for (const k of ['edited_asset','mask_asset','original_asset']) {
                         const w = node.widgets.find(w => w.name === k);
                         if (w) { w.value = result[k]; w.callback?.(result[k]); }
