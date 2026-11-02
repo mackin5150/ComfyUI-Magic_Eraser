@@ -1,127 +1,143 @@
 # ComfyUI Magic Eraser — Pristine Interactive Suite
 
-An interactive photo editor for ComfyUI, inspired by the supplied yellow-sleeve editor reference. Open the editor, work on a photo, **Apply to Node**, then **Run** to export. The main editor node never launches a model by itself.
+A model-backed photo editor inside ComfyUI. Select an object, remove or repair it, and continue editing the **new result** in the same UI. Intermediate photos and masks are temporary. **Save final image** writes only the final edited frame to ComfyUI's output folder and deletes that session's temporary files.
 
-## Included
+## Install or update
 
-- Dark responsive editor with a large image area and red selection overlay.
-- Brush, freehand lasso, color-region Detect, and Deselect brush; adjustable brush and tolerance.
-- Local object repair (OpenCV Telea), selective blur, transparent cutout, rotate and flip.
-- Undo/redo (12 steps), original comparison, zoom, and fit.
-- Expand any of the four canvas edges for outpainting; new borders become the selection mask.
-- Upload photos directly or stage images from another ComfyUI node.
-- Model Inpaint / Outpaint companion using your own MODEL, VAE and prompt conditioning.
-- Standard IMAGE and MASK outputs, original IMAGE, and RGBA IMAGE for transparent PNG saving.
-- No API keys, cloud editing, APK installation, or model download required for local tools.
-
-This is an independent implementation, not the Android app or its proprietary engine. Detect selects connected similar colors; it is **not AI object segmentation**. App features such as AI filters, text generation, smart background removal and automatic semantic detection are not implemented in this version.
-
-## Install — bash or fish, same commands
-
-Use the Python environment that runs ComfyUI. From the ComfyUI directory:
+From your ComfyUI directory, using the Python environment that runs ComfyUI (same commands for bash and fish):
 
 ```sh
 git clone --branch dev/interactive-editor https://github.com/mackin5150/ComfyUI-Magic_Eraser.git custom_nodes/ComfyUI-Magic_Eraser
 python -m pip install -r custom_nodes/ComfyUI-Magic_Eraser/requirements.txt
 ```
 
-Restart ComfyUI, then hard-refresh the browser. Search for **Pristine** in Add Node. ComfyUI already supplies PyTorch; the requirements intentionally do not reinstall it or alter its CUDA build. OpenCV runs on CPU and does not require CUDA. ARM64/GB10 needs a compatible opencv-python-headless wheel for its Python version.
+If already installed:
 
-For portable Windows, use `python_embeded\python.exe -m pip install -r ComfyUI\custom_nodes\ComfyUI-Magic_Eraser\requirements.txt` from the portable root after cloning into `ComfyUI\custom_nodes`.
-
-## 1. Upload → edit → Save Image
-
-1. Add **Pristine • Open Photo Editor** and standard **Save Image**.
-2. Connect editor `image` → Save Image `images` (or `rgba` for transparency).
-3. Click **Open Photo Editor → Upload photo**.
-4. Paint with Brush, circle with Lasso, or select a connected color with Detect.
-5. Choose **Remove selected** for quick local repair. Clear the red selection to inspect the result. Undo reverses both image edits and selection edits.
-6. Click **Apply to Node**, close the editor, and click **Run**. Save Image writes the finished image to the normal ComfyUI output folder.
-
-The three asset fields on the node are managed by the editor. Leave them alone. Applying creates immutable working PNGs under `ComfyUI/input/pristine_eraser/`; it does not create a final output image. Your workflow stores their filenames. Keep that folder with workflow backups and copy it when moving workflows to another machine. Old working assets are retained; deleting them breaks workflows that reference them. Closing without Apply discards uncommitted changes.
-
-## 2. Receive a photo from another node
-
-1. Connect any IMAGE output → **Pristine • Send to Editor** `image`.
-2. Use slot `source` (or any name), choose `batch_index`, and Run that branch once.
-3. In the editor, enter `source` beside **Load from Node**, then click it.
-4. Edit, Apply to Node, and Run the editor → Save Image branch.
-
-The stage node selects a single image from a batch. Use different slots for independent editing sessions. Stage nodes are output nodes, so connected stage branches execute on Run even without Save Image. Avoid wiring a loop; receiving and exporting are separate passes.
-
-## 3. Add your own inpaint model
-
-For a self-contained SD1.5 or SDXL checkpoint, put its `.safetensors` file in:
-
-```text
-ComfyUI/models/checkpoints/
+```sh
+git -C custom_nodes/ComfyUI-Magic_Eraser switch dev/interactive-editor
+git -C custom_nodes/ComfyUI-Magic_Eraser pull --ff-only
 ```
 
-Refresh ComfyUI's model list or restart. Select it in **Load Checkpoint**. For a separate VAE, put it in `ComfyUI/models/vae/` and choose **Load VAE** instead of the checkpoint's VAE output.
+Restart ComfyUI, hard-refresh the browser, and search **Pristine** in Add Node. The editor header must show **v0.5.0** and **Check connection** must report backend **0.5.0**. A version mismatch during model editing tells you to restart/refresh. Frontend module imports are versioned to reduce stale-script problems.
 
-Add **Pristine • Model Inpaint / Outpaint** and wire:
+The requirements do not reinstall PyTorch or change its CUDA build. OpenCV's optional legacy repair API runs on CPU; model editing uses your ComfyUI model setup. ARM64/GB10 requires a compatible OpenCV wheel for its Python version.
+
+## Editing and final-only saving
+
+1. Add **Pristine • Open Photo Editor** and click **Open Photo Editor**.
+2. Upload a photo, or receive one from Send to Editor as described below.
+3. Paint/lasso a selection. The red overlay is a mask display, never baked into the working photo.
+4. Click **Remove with Model** or **Repair with Model**. The completed image becomes the current working photo, the selection clears, and the header advances to **Edit 1**, **Edit 2**, etc. The next operation uses that current photo.
+5. Continue editing. Undo/Redo restore image, mask and edit revision. Show original compares against the photo loaded at the start of this session.
+6. Click **Save final image** when finished. The clean current photo is written to `ComfyUI/output/pristine_eraser/<id>.png`. Its alpha is preserved.
+7. After the final PNG is committed, the session's temporary source copies, generated images, masks and progress receipts are deleted. Undo history is cleared. Repeated Save without a new edit does not create another image.
+
+**Run is not required to save the final image.** The main node is updated to reference that one saved output, so its IMAGE/RGBA outputs can still feed other nodes on normal Run. Its selection-mask output is then empty; original output equals the saved final, since the previous session's original and masks were discarded. A downstream **Save Image** creates another copy if you choose to run it; it is not needed for this final-only save flow. The example `direct-save.json` and `main-node-model-editor.json` omit that extra saver.
+
+## Temporary-file lifecycle
+
+Editing files belong to a random session under `ComfyUI/temp/pristine_eraser/sessions/`. Each editor only cleans its own session. Other sessions, model weights, unrelated ComfyUI files and saved final images are preserved. Model caching/retention is independent of photo cleanup.
+
+A final write is atomic and happens **before** cleanup. If saving fails, the temporary edit remains recoverable in the open UI. If cleanup fails after saving, the UI reports it and retries cleanup on close. Retrying a save after a lost response uses the same final filename instead of creating duplicates. Active model jobs prevent their session from being cleaned.
+
+Closing and confirming discard removes the unsaved session. Replacing the photo discards the previous temporary session. Browser crashes/abandoned sessions are eligible for cleanup after 24 hours of inactivity when a new session starts; active jobs are excluded. ComfyUI may also clear its own temp directory on restart. Temporary sessions are not durable project backups.
+
+Older versions' working files under `input/pristine_eraser/` remain readable and are not globally deleted: existing saved workflows may reference them. Newly created UI editing progress no longer accumulates there. Send to Editor uses temporary staged files and replaces only the previous staged image in the same slot; staging sources are separate from session history.
+
+## Model connections
+
+For SD1.5/SDXL checkpoints, put the `.safetensors` checkpoint in `ComfyUI/models/checkpoints/`, refresh/restart, and select it in Load Checkpoint. A separate VAE goes in `models/vae/`.
+
+| From | Main editor / destination |
+| --- | --- |
+| Load Checkpoint MODEL (or compatible diffusion loader) | `model` |
+| Load Checkpoint VAE / Load VAE | `vae` |
+| CLIP / compatible text-encoder loader | main editor `clip` |
+| CLIP | positive and negative CLIP Text Encode nodes |
+| Positive / negative conditioning | main editor `positive` / `negative` for conventional conditioning workflows |
+
+Remove/Repair use the editor's visible **Fill instruction**, freshly encoded through the connected CLIP. Their queue snapshots exclude unrelated workflow positive/negative conditioning, preventing a sample office-scene prompt from being silently inherited. The default instruction asks for continuation of the surrounding scene; you can specify the intended material, such as “continue the white collar and fabric, matching texture and lighting.” Outpaint uses a scene-continuation instruction. Results remain model-dependent and cannot recover the actual hidden scene.
+
+Select `regular_checkpoint` or `dedicated_inpaint_checkpoint` as appropriate. Main-node settings include seed, steps, cfg, guidance, sampler, scheduler, denoise, render_max_side and blend_pixels. Inward edge blending preserves unselected pixels; select slightly beyond an unwanted object's boundary/shadow. Rendering is capped by render_max_side, then composited back at the working photo's size. Very small selections can lose detail when downscaled.
+
+### FLUX Fill checkpoints (AGFlux_fill and similar)
+
+FLUX Fill is supported natively by the main editor's model buttons — no companion node or separate workflow needed. The node detects a loaded FLUX model automatically and applies the official Black Forest Labs recipe: full-image latent with image+mask conditioning (`InpaintModelConditioning` without noise mask), `cfg` forced to 1.0, FluxGuidance on the positive prompt only, and euler/normal sampling when the SD defaults are left untouched.
+
+Wire standard ComfyUI loaders into the main editor:
 
 | From | To |
 | --- | --- |
-| Editor `image` | Model Inpaint / Outpaint `image` |
-| Editor `selection_mask` | Model Inpaint / Outpaint `mask` |
-| Load Checkpoint `MODEL` | Model Inpaint / Outpaint `model` |
-| Load Checkpoint `VAE` (or Load VAE) | Model Inpaint / Outpaint `vae` |
-| Load Checkpoint `CLIP` | Two CLIP Text Encode nodes `clip` |
-| Positive CLIP Text Encode | Model Inpaint / Outpaint `positive` |
-| Negative CLIP Text Encode | Model Inpaint / Outpaint `negative` |
-| Model Inpaint / Outpaint `IMAGE` | Save Image and/or Send to Editor |
+| UNETLoader (e.g., `AGFlux_fill.safetensors` in `models/diffusion_models/`) | Main editor `model` |
+| VAELoader (`flux_vae.safetensors` or `ae.safetensors` in `models/vae/`) | Main editor `vae` |
+| DualCLIPLoader (`t5xxl_fp16.safetensors`, `clip_l.safetensors`, type **flux**) — or ComfyUI-GGUF's DualCLIPLoaderGGUF with a quantized T5 encoder | Both CLIP Text Encode nodes' `clip` **and** main editor `clip` (preload) |
+| Positive CLIP Text Encode | Main editor `positive` |
+| Negative CLIP Text Encode | Main editor `negative` |
 
-Select `regular_checkpoint` for ordinary SD1.5/SDXL checkpoints, or `dedicated_inpaint_checkpoint` for compatible dedicated inpaint checkpoints. Model, VAE and conditioning must belong to compatible architectures. This companion uses ComfyUI's native VAE inpaint encoding, optional inpaint conditioning, sampler and decoder. It is not a universal loader for every model family.
+For conventional companion workflows, set the positive prompt to describe what should appear in the selection; the negative prompt can be empty for FLUX Fill. Use the **guidance** widget (default 30) instead of cfg: guidance carries the model strength while cfg is forced to 1.0 on FLUX models. Leave sampler/scheduler at their defaults and the node switches them to euler/normal automatically; your own choice is respected.
 
-For Flux Fill, Qwen Image Edit, WAN, or another specialized model, use its native loader and conditioning workflow. The editor's IMAGE/MASK outputs can feed that workflow, and its decoded IMAGE can feed Send to Editor. Do not assume the SD companion's settings apply to those architectures.
+The first run loads the ~12 GB diffusion weights plus T5, so click **Preload Models** once (with `clip` connected as above) before editing. With keep_loaded enabled, the editor retains the bundle between edits; ComfyUI still controls GPU placement and may offload under memory pressure.
 
-### Inpaint
+## Preloading
 
-Paint the region you want regenerated, **Apply to Node**, then Run the model branch. Use the prompt to describe the desired finished scene. For removal, describe the background that should fill the selected region. White/red means regenerate; black/unselected means preserve.
+Connect MODEL, CLIP and VAE, then click **Preload Models** before editing. The first load still takes time. Leave `keep_loaded=true` to retain the model bundle between edits; **Release Models** drops the suite's references. ComfyUI still manages device placement and may offload under memory pressure or according to launch settings. Preloading does not eliminate queue, encoding, sampling or decoding time. Photo-session cleanup does not unload or delete model weights.
 
-### Outpaint
+## Tools
 
-Choose **Expand for outpaint**, enter padding as `left,top,right,bottom` pixels, for example `0,0,256,0`. The new right border is selected automatically. Brush a small overlap into the original edge if the seam needs blending. Apply to Node and Run the model branch using the same model connections.
+- Remove, Repair and Outpaint use the loaded model.
+- Brush, lasso and deselect define the mask. **Color Select** selects connected similar colors, not semantic objects.
+- Expand for outpaint adds selected borders. Click Outpaint with Model to fill them.
+- Crop, rotate, flip, blur and alpha cutout are deterministic local operations.
+- Undo/Redo are cumulative edit history, not independently blendable layers.
 
-The canvas expansion changes the working photo dimensions. New areas start neutral gray; the model fills the selected border. The model companion renders at `render_max_side` (default 1024) and returns the editor's full canvas size. Larger render sizes use more VRAM. Unselected pixels are composited back from the source, preserving them exactly. Very thin masks can disappear when downscaled; use a larger render size for small details. The original output remains the untransformed original photo and can have different dimensions after rotation/expansion.
+The APK video is a visual reference; this independent implementation does not distribute the APK's code, assets or proprietary engine. Semantic object detection and automatic AI background segmentation are not implemented.
 
-### Return the generated result to the editor
+## Receive an upstream photo
 
-Connect the model output → Send to Editor, slot `result`. Run once, then load `result` inside the editor. This replaces the current editing session and establishes the generated image as its new original. The graph remains acyclic; loading is an explicit transfer between passes. Once satisfied, use editor → Save Image for the final Run; bypass/disconnect the model branch if you no longer want it to run.
+Connect an IMAGE output to **Pristine • Send to Editor**, choose a slot/batch index and Run once. In the editor enter that slot and click **Load from Node**. The editor imports one image from the batch and subsequent edits remain in its session. Keep transfers acyclic.
 
-## Nodes
+The separate **Pristine • Model Inpaint / Outpaint** companion is retained for conventional graph workflows. It uses its connected positive/negative conditioning and does not itself save files. `model-inpaint-outpaint.json` demonstrates that conventional workflow, including an explicitly connected Save Image node; it is separate from the new final-only UI save path. `main-node-model-editor.json` is the recommended editor workflow. Choose an installed compatible checkpoint before using it.
 
-| Node | Purpose |
-| --- | --- |
-| Pristine • Open Photo Editor | Opens the editing UI and exports applied assets on Run |
-| Pristine • Send to Editor | Stages one upstream image in a named slot |
-| Pristine • Model Inpaint / Outpaint | Optional SD-style masked generation with user-supplied models |
-| Pristine • Split Alpha | Converts RGBA to RGB and a ComfyUI alpha mask (1 = transparent) |
+## Result delivery and diagnosis
 
-`selection_mask` uses 1 = selected for generation. Split Alpha uses ComfyUI's transparency-mask convention; these masks serve different purposes.
+Completed jobs return through a request-scoped websocket notification, temporary worker receipts and ComfyUI History fallback. Receipt polling/image downloads bypass caches; returned source IDs and image dimensions must match the pending edit. A completed render can therefore reach the canvas even while History remains empty or lacks custom UI output. The editor reports loading/preparing/sampling/download phases; these are not denoising-image previews.
 
-## Examples
+**Check connection** reports backend version 0.5.0. Errors identify their phase and endpoint. HTTP 413 indicates a request-size limit; non-JSON responses can indicate a proxy/login/error page. Read-only status checks tolerate connection interruptions, while queue POSTs are never automatically retried. If submission loses its response, inspect Queue/History before retrying. A live server error still requires its log or displayed message to diagnose; no specific tunnel/server root cause has been confirmed here.
 
-Import `examples/direct-save.json` for the upload/save path. Import `examples/model-inpaint-outpaint.json` for a connected SD-style model branch. The model example intentionally has a placeholder checkpoint; select an installed compatible checkpoint and edit the positive/negative prompts before Run. Both need a photo loaded and applied first. Neither example includes user photos or downloaded weights.
+Use the editor on the root workflow canvas; nested-subgraph model editing is not supported. Model jobs time out in the editor after 30 minutes. Keep the normal private access controls around your ComfyUI instance; the suite has no separate login.
 
-## Validation and limits
-
-Run from this repository:
+## Validation
 
 ```sh
 python -m unittest discover -s tests -v
+node tests/model_queue_check.mjs
 node --input-type=module --check < web/editor.js
 node --input-type=module --check < web/extension.js
 ```
 
-The automated tests exercise image repair, masks, staging, asset validation, tensor exports and mocked sampler integration. The standalone route/UI harness is `python tests/harness.py` at `http://127.0.0.1:8199`; it stubs the ComfyUI host only and uses real image operations and routes. It is for development, not installation.
+Thirteen Python tests cover model/CLIP instruction paths, FLUX/SD sampler integration, masks, pixel preservation, receipts, preloading, temporary session ownership, save failure, active-job protection, final-only output and cleanup. Model management and generation are simulated in tests; actual GPU quality/residency needs validation on your installation.
 
-A real ComfyUI/GPU generation run is still required to confirm model quality and frontend compatibility on your installation. This development environment has no running ComfyUI or model weights. Photos are limited to 24 megapixels. Editing uses browser canvas and 8-bit PNG working assets; it does not preserve RAW/HDR data, EXIF, animation, or original color profiles. Large photos and undo history consume browser RAM. Use ComfyUI's normal private access controls; the editor has no separate login.
+For DOM/canvas checks, install development-only packages, then start the harness in one terminal and run the check in another:
 
-## Design references
+```sh
+npm install --no-save --package-lock=false jsdom @napi-rs/canvas
+python tests/harness.py
+```
 
-- ComfyUI extension hooks: https://docs.comfy.org/custom-nodes/js/javascript_hooks
-- ComfyUI native node implementation: https://github.com/Comfy-Org/ComfyUI/blob/master/nodes.py
+```sh
+node tests/ui_check.cjs
+```
 
-No Android APK code, logos, screenshots, or user photos are distributed in this repository.
+For the expanded queue/worker check, restart the harness with:
+
+```sh
+python tests/harness.py --mock-queue
+```
+
+```sh
+node tests/queued_editor_check.cjs
+```
+
+That check submits a real HTTP queue request to a host simulation, runs the actual Python editor worker with a deterministic simulated model, keeps History empty, retrieves the completion receipt/image, and verifies two visible cumulative canvas edits. It then asserts one clean final output image, no session progress files, no legacy input progress images, and no red overlay in the saved PNG. This is stronger than a mocked image callback but is still not a real ComfyUI/GPU/browser layout test.
+
+Working photos are limited to 24 megapixels. Browser canvas and 8-bit PNG do not preserve RAW/HDR, EXIF, animation or original color profiles. Large photos and undo history consume browser RAM.

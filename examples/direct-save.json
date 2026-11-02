@@ -1,0 +1,65 @@
+{
+  "last_node_id": 1,
+  "last_link_id": 0,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "PristineEditor",
+      "pos": [
+        30,
+        120
+      ],
+      "size": [
+        310,
+        210
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": []
+        },
+        {
+          "name": "selection_mask",
+          "type": "MASK",
+          "links": []
+        },
+        {
+          "name": "original",
+          "type": "IMAGE",
+          "links": []
+        },
+        {
+          "name": "rgba",
+          "type": "IMAGE",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PristineEditor"
+      },
+      "widgets_values": [
+        "",
+        "",
+        ""
+      ]
+    }
+  ],
+  "links": [],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.75,
+      "offset": [
+        30,
+        30
+      ]
+    }
+  },
+  "version": 0.4
+}
